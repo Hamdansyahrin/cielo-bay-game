@@ -1,160 +1,198 @@
-// police.js — the wanted level, police spawning and pursuit on the road grid,
-// roadblocks at high heat, heat decay, and the BUSTED / WASTED states.
-import { WANTED, POLICE_COLOR, GAME, WORLD } from './config.js';
-import { makeCar, updatePoliceCar } from './driving.js';
-import { dist2, clamp } from './random.js';
-import { nearestRoadX, nearestRoadY } from './city.js';
-import { nextCarId } from './entities.js';
+// Cielo Bay — police.js: the wanted system. Crimes add points; points
+// set the star level; police cars spawn on the road grid and chase the
+// player down it. Stay hidden and the heat cools off a star at a time.
+// Get caught on foot or pinned in a slow car and it is BUSTED.
+(function () {
+  'use strict';
+  var CB = window.CB = window.CB || {};
 
-export function makePoliceState() {
-  return {
-    wanted: 0,
-    hiddenTimer: 0,
-    lastCrimeAt: null,
-    bustTimer: 0,
-    roadblockSpawnedFor: 0,
-  };
-}
-
-// A crime raises the wanted level (capped at 5) and resets the hide clock.
-export function addWanted(G, stars, reason) {
-  const before = G.wanted;
-  G.wanted = Math.min(WANTED.maxStars, G.wanted + stars);
-  G.lastCrimeAt = G.time;
-  G.police.hiddenTimer = 0;
-  if (G.wanted > before) {
-    G.toast(`Wanted level ${'★'.repeat(G.wanted)}${G.wanted < WANTED.maxStars ? '☆'.repeat(WANTED.maxStars - G.wanted) : ''} — ${reason}`);
-    if (typeof G.onWantedChange === 'function') G.onWantedChange(G.wanted);
+  function levelFor(points) {
+    var pts = CB.CFG.WANTED_POINTS;
+    var level = 0;
+    for (var i = 0; i < pts.length; i++) if (points >= pts[i]) level = i;
+    return level;
   }
-}
 
-export function policeCars(G) {
-  return G.cars.filter((c) => c.kind === 'police');
-}
-
-function spawnPoliceCar(G, nearPlayer) {
-  const city = G.city;
-  const px = G.player.car ? G.player.car.x : G.player.x;
-  const py = G.player.car ? G.player.car.y : G.player.y;
-  // Spawn on a road at the edge of the visible area, on the player's side of town.
-  const axis = G.rng() < 0.5 ? 'x' : 'y';
-  let x, y, road;
-  if (axis === 'x') {
-    road = nearestRoadY(city, py);
-    x = clamp(px + (G.rng() < 0.5 ? -1 : 1) * 620, 120, WORLD.W - 120);
-    y = road + 14;
-  } else {
-    road = nearestRoadX(city, px);
-    x = road + 14;
-    y = clamp(py + (G.rng() < 0.5 ? -1 : 1) * 620, 120, WORLD.H - 120);
+  function addCrime(G, points) {
+    G.wantedPoints += points;
+    G.lastCrimeAt = G.time;
+    G.lastSeenAt = G.time;
+    var level = levelFor(G.wantedPoints);
+    if (level !== G.wanted) {
+      G.wanted = level;
+      if (level > 0) CB.toast(G, 'WANTED — ' + level + (level === 1 ? ' star' : ' stars'), 3);
+    }
   }
-  const car = makeCar({
-    id: nextCarId(), kind: 'police',
-    x, y, angle: axis === 'x' ? 0 : Math.PI / 2,
-    color: POLICE_COLOR, driver: 'ai',
-    axis, road, dir: 1, lane: 14, cruise: 420,
-  });
-  car.speed = 380;
-  G.cars.push(car);
-  return car;
-}
 
-function spawnRoadblock(G) {
-  const px = G.player.car ? G.player.car.x : G.player.x;
-  const py = G.player.car ? G.player.car.y : G.player.y;
-  const axis = G.rng() < 0.5 ? 'x' : 'y';
-  const ahead = 420;
-  for (let i = -1; i <= 1; i++) {
-    const x = axis === 'x' ? px + ahead : px + i * 52;
-    const y = axis === 'x' ? py + i * 52 : py + ahead;
-    if (x < 100 || x > WORLD.W - 100 || y < 100 || y > WORLD.H - 100) continue;
-    const car = makeCar({
-      id: nextCarId(), kind: 'police',
-      x, y, angle: axis === 'x' ? Math.PI / 2 : 0,
-      color: POLICE_COLOR, driver: 'none',
-      axis: axis === 'x' ? 'y' : 'x', road: axis === 'x' ? x : y, dir: 1,
-    });
-    car.speed = 0;
-    car.mode = 'roadblock';
+  // Heat cools only while no police can see the player and no crime is
+  // fresh. A directly-set wanted level (a mission, a debug handle) is
+  // honoured: its points are synced up to that level's threshold.
+  function updateWanted(G, dt) {
+    if (G.wanted !== levelFor(G.wantedPoints)) {
+      if (G.wanted > levelFor(G.wantedPoints)) {
+        G.wantedPoints = CB.CFG.WANTED_POINTS[Math.min(G.wanted, 5)];
+      } else {
+        G.wanted = levelFor(G.wantedPoints);
+      }
+    }
+    if (G.wanted <= 0) return;
+    var seen = false;
+    for (var i = 0; i < G.police.length; i++) {
+      if (Math.hypot(G.police[i].x - G.player.x, G.police[i].y - G.player.y) < 560) { seen = true; break; }
+    }
+    if (seen || G.time - G.lastCrimeAt < CB.CFG.HEAT_HIDDEN_SECS) G.lastSeenAt = G.time;
+    if (G.time - G.lastSeenAt > CB.CFG.HEAT_HIDDEN_SECS) {
+      G.heatTimer += dt;
+      if (G.heatTimer >= CB.CFG.HEAT_DECAY_SECS) {
+        G.heatTimer = 0;
+        G.wantedPoints = Math.max(0, G.wantedPoints - 35);
+        var level = levelFor(G.wantedPoints);
+        if (level < G.wanted) {
+          G.wanted = level;
+          CB.toast(G, G.wanted === 0 ? 'Heat lost — you are clean' : 'Heat cooling — ' + G.wanted + ' stars', 2.5);
+        }
+      }
+    } else {
+      G.heatTimer = 0;
+    }
+  }
+
+  function spawnPoliceCar(G, nearX, nearY) {
+    var cfg = CB.CFG;
+    var p = null;
+    for (var tries = 0; tries < 12; tries++) {
+      var cand = G.rng.roadPoint(cfg);
+      var d = Math.hypot(cand.x - nearX, cand.y - nearY);
+      if (d > 420 && d < 950) { p = cand; break; }
+    }
+    if (!p) p = { x: nearX + 500, y: nearY };
+    var car = CB.makeCar(G, { x: p.x, y: p.y, angle: 0, model: 'police', isPolice: true, color: '#1a2a3a' });
+    car.ai = { mode: 'pursue', stuckT: 0, reverseT: 0 };
+    car.bustT = 0;
     G.cars.push(car);
-  }
-  G.toast('Roadblock ahead!');
-}
-
-export function updatePolice(G, dt) {
-  const px = G.player.car ? G.player.car.x : G.player.x;
-  const py = G.player.car ? G.player.car.y : G.player.y;
-
-  // Keep the right number of pursuit cars on the road.
-  const want = G.wanted > 0 ? Math.min(GAME.policeMax, G.wanted * WANTED.policePerStar) : 0;
-  const have = policeCars(G).filter((c) => c.mode !== 'roadblock').length;
-  if (have < want && G.time - (G.lastPoliceSpawn || 0) > 1.2) {
-    G.lastPoliceSpawn = G.time;
-    spawnPoliceCar(G);
-  }
-  // Roadblocks at 4-5 stars, once per wanted level reached.
-  if (G.wanted >= 4 && G.police.roadblockSpawnedFor !== G.wanted) {
-    G.police.roadblockSpawnedFor = G.wanted;
-    spawnRoadblock(G);
-  }
-  if (G.wanted === 0) G.police.roadblockSpawnedFor = 0;
-
-  for (const car of policeCars(G)) {
-    if (car.mode === 'roadblock') continue;
-    updatePoliceCar(G, car, dt);
-    // Siren flash timer for the renderer.
-    car.blinker += dt * 6;
+    G.police.push(car);
+    return car;
   }
 
-  // Heat decay: hidden (no police close, no recent crime) for long enough drops a star.
-  if (G.wanted > 0) {
-    const nearest = policeCars(G).reduce((m, c) => Math.min(m, dist2(c.x, c.y, px, py)), Infinity);
-    const hidden = nearest > 520 * 520 && (G.lastCrimeAt === null || G.time - G.lastCrimeAt > 6);
-    if (hidden) {
-      G.police.hiddenTimer += dt;
-      if (G.police.hiddenTimer >= WANTED.decayHiddenSeconds) {
-        G.police.hiddenTimer = 0;
-        G.wanted -= 1;
-        G.toast(G.wanted === 0 ? 'You lost them. The heat is off.' : `Heat dropping — ${G.wanted} star${G.wanted > 1 ? 's' : ''} left.`);
-        if (typeof G.onWantedChange === 'function') G.onWantedChange(G.wanted);
-      }
-    } else {
-      G.police.hiddenTimer = 0;
+  CB.levelFor = levelFor;
+  CB.addCrime = addCrime;
+  CB.updateWanted = updateWanted;
+  CB.spawnPoliceCar = spawnPoliceCar;
+
+  // Police cars chase on the road grid: steer toward the player, back
+  // up when wedged against a building, and ram to make the bust.
+  function updatePolice(G, dt) {
+    var wanted = G.wanted;
+    var desired = wanted > 0 ? Math.min(wanted, CB.CFG.MAX_POLICE) : 0;
+    G.policeSpawnT = (G.policeSpawnT || 0) - dt;
+    if (G.police.length < desired && G.policeSpawnT <= 0) {
+      spawnPoliceCar(G, G.player.x, G.player.y);
+      G.policeSpawnT = 0.9;
     }
-  }
-
-  // BUSTED: a police car sits on the player on foot for a moment.
-  if (G.wanted > 0 && G.player.onFoot && G.screen === 'playing') {
-    const close = policeCars(G).some((c) => dist2(c.x, c.y, px, py) < WANTED.bustDistance * WANTED.bustDistance);
-    if (close) {
-      G.police.bustTimer += dt;
-      if (G.police.bustTimer >= WANTED.bustHoldSeconds) {
-        G.police.bustTimer = 0;
-        G.screen = 'busted';
-        if (typeof G.onBusted === 'function') G.onBusted();
-      }
-    } else {
-      G.police.bustTimer = 0;
+    // Wanted dropped: the furthest cruisers peel off and despawn.
+    if (G.police.length > desired) {
+      G.police.sort(function (a, b) {
+        return Math.hypot(b.x - G.player.x, b.y - G.player.y) - Math.hypot(a.x - G.player.x, a.y - G.player.y);
+      });
+      var extra = G.police.pop();
+      var idx = G.cars.indexOf(extra);
+      if (idx >= 0) G.cars.splice(idx, 1);
     }
-  }
-
-  // Despawn police that are far away once the heat is off.
-  if (G.wanted === 0) {
-    const before = G.cars.length;
-    G.cars = G.cars.filter((c) => {
-      if (c.kind !== 'police') return true;
-      return dist2(c.x, c.y, px, py) < 900 * 900;
+    updateRoadblocks(G, dt);
+    var p = G.player;
+    G.police.forEach(function (car) {
+      if (car.wrecked) return;
+      var def = CB.CFG.CARS.police;
+      var dx = p.x - car.x, dy = p.y - car.y;
+      var dist = Math.hypot(dx, dy) || 1;
+      var wantAngle = Math.atan2(dy, dx);
+      var diff = wantAngle - car.angle;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      car.ai.reverseT = Math.max(0, (car.ai.reverseT || 0) - dt);
+      if (car.ai.reverseT > 0) {
+        car.speed = Math.max(-160, car.speed - 500 * dt);
+      } else {
+        car.angle += Math.max(-3.2 * dt, Math.min(3.2 * dt, diff));
+        car.speed = Math.min(def.top, car.speed + def.accel * dt);
+      }
+      var nx = car.x + Math.cos(car.angle) * car.speed * dt;
+      var ny = car.y + Math.sin(car.angle) * car.speed * dt;
+      var fx = nx + Math.cos(car.angle) * 20, fy = ny + Math.sin(car.angle) * 20;
+      if (G.city.blocked(fx, fy, 13)) {
+        // Wedged: reverse out for a moment, then try again.
+        car.ai.reverseT = 0.7;
+        car.speed = -Math.abs(car.speed) * 0.4;
+        nx = car.x; ny = car.y;
+      }
+      car.x = nx; car.y = ny;
+      // Shove other cars aside instead of stacking on them.
+      G.cars.forEach(function (other) {
+        if (other === car || other.wrecked) return;
+        var ox = other.x - car.x, oy = other.y - car.y;
+        var od = Math.hypot(ox, oy);
+        if (od > 0.01 && od < 42) {
+          other.x += (ox / od) * (42 - od) * 0.5;
+          other.y += (oy / od) * (42 - od) * 0.5;
+          if (other.isTraffic) other.speed *= 0.6;
+        }
+      });
+      // The bust: caught on foot up close, or pinned in a slow car.
+      var touching = dist < 48;
+      var pinned = !p.onFoot && p.car && Math.abs(p.car.speed) < 80;
+      if (touching && (p.onFoot || pinned)) {
+        car.bustT = (car.bustT || 0) + dt;
+        if (car.bustT > (p.onFoot ? 1.2 : 1.6)) doBusted(G);
+      } else {
+        car.bustT = Math.max(0, (car.bustT || 0) - dt * 2);
+      }
+      CB.carSmoke(G, car, dt);
     });
-    if (G.cars.length !== before) {
-      // leave roadblocks to fade with the heat
+    CB.Audio.updateSiren(G.police.length > 0, dt);
+  }
+
+  // At 4-5 stars the law parks two cruisers across the road ahead.
+  function updateRoadblocks(G, dt) {
+    if (G.wanted >= 4) {
+      if (!G.roadblocks) G.roadblocks = [];
+      if (G.roadblocks.length < 2) {
+        var p = G.player;
+        var dir = p.car ? Math.sign(p.car.speed || 1) : 1;
+        var ahead = 320 + G.roadblocks.length * 90;
+        var bx = p.x + Math.cos(p.car ? p.car.angle : p.faceAngle || 0) * ahead * dir;
+        var by = p.y + Math.sin(p.car ? p.car.angle : p.faceAngle || 0) * ahead * dir;
+        var block = CB.makeCar(G, { x: bx, y: by, angle: (p.car ? p.car.angle : 0) + Math.PI / 2, model: 'police', isPolice: true, color: '#1a2a3a' });
+        block.ai = { mode: 'block' };
+        G.cars.push(block);
+        G.roadblocks.push(block);
+      }
+    } else if (G.roadblocks && G.roadblocks.length > 0) {
+      G.roadblocks.forEach(function (b) {
+        var i = G.cars.indexOf(b);
+        if (i >= 0) G.cars.splice(i, 1);
+      });
+      G.roadblocks = [];
     }
   }
-}
 
-// WASTED check lives here too: health at zero ends the run.
-export function checkWasted(G) {
-  if (G.player.health <= 0 && G.screen === 'playing') {
-    G.screen = 'wasted';
-    if (typeof G.onWasted === 'function') G.onWasted();
+  function doBusted(G) {
+    G.screen = 'busted';
+    G.cash = Math.max(0, G.cash - 200);
+    G.wanted = 0;
+    G.wantedPoints = 0;
+    G.police.forEach(function (c) {
+      var i = G.cars.indexOf(c);
+      if (i >= 0) G.cars.splice(i, 1);
+    });
+    G.police = [];
+    if (G.player.car) CB.exitCar(G);
+    G.player.x = G.city.spawn.x; G.player.y = G.city.spawn.y;
+    G.player.hp = G.player.maxHp;
+    CB.Audio.setEngine(0, false);
+    CB.Audio.updateSiren(false, 0);
+    CB.Save.write(G);
   }
-}
+
+  CB.updatePolice = updatePolice;
+  CB.doBusted = doBusted;
+})();

@@ -1,138 +1,122 @@
-// config.js — constants, palette, districts, streets and tuning for Cielo Bay.
-// Every name, street and character here is original fiction. No Rockstar/GTA content.
-export const WORLD = { W: 3200, H: 2400, ROAD_W: 72, SIDEWALK: 16 };
+// Cielo Bay — config.js: every constant, palette, car definition and
+// district of the city in one place, so the rest of the game reads
+// numbers from here instead of hiding magic values in its logic.
+(function () {
+  'use strict';
+  var CB = window.CB = window.CB || {};
 
-// Sunset-warm palette: golden hour over a coastal city.
-export const PALETTE = {
-  groundDowntown: '#b99a6b',
-  groundMidtown: '#c2a273',
-  groundPort: '#a08b6d',
-  sand: '#e8c98a',
-  sandWet: '#d9b878',
-  waterDeep: '#2e6f8e',
-  waterShallow: '#4f9db5',
-  waterGlint: '#ffd9a0',
-  road: '#3d3a38',
-  roadLine: '#e8d27a',
-  sidewalk: '#8f8578',
-  curb: '#6f675c',
-  buildingTop: '#e8b07a',
-  buildingSide: '#8a5f43',
-  buildingGlass: '#ffd98a',
-  roofA: '#c98a5a',
-  roofB: '#7a6a8a',
-  roofC: '#5a7a6a',
-  palmTrunk: '#6b4a2f',
-  palmLeaf: '#3f8a4a',
-  pierWood: '#7a5a38',
-  containerA: '#c95a3a',
-  containerB: '#3a7ac9',
-  containerC: '#5ac93a',
-  grass: '#7a9a4a',
-};
+  var CFG = {
+    // View and world.
+    VIEW_W: 1280,
+    VIEW_H: 720,
+    WORLD_W: 3200,
+    WORLD_H: 2400,
+    ROAD_W: 96,
+    SIDEWALK: 26,
+    // Road centre lines. x=600 is the player's spawn road; x=2900 is the
+    // beachfront drive; y=2200 is the port road.
+    ROADS_V: [200, 600, 1000, 1400, 1800, 2200, 2600, 2900],
+    ROADS_H: [200, 600, 1000, 1400, 1800, 2200],
+    // Beach and water: sand starts east of the beachfront drive, the sea
+    // east of the sand. The pier runs from the drive out over the water.
+    SAND_X0: 2960,
+    WATER_X0: 3080,
+    PIER: { x0: 2890, x1: 3190, y0: 966, y1: 1034 },
+    // Landmarks.
+    SPAWN: { x: 600, y: 1400 },
+    CHOP_SHOP: { x: 600, y: 2110, r: 140 },
+    VAN_SPAWN: { x: 1400, y: 2260 },
+    MISSION_CAR: { x: 1032, y: 648 },
+    PIER_MEET: { x: 3060, y: 1000 },
+    // Sunset-warm palette. The sun sits low in the west, so shadows fall
+    // long toward the east and every lit window glows amber.
+    PALETTE: {
+      ground: '#8a7f6d',
+      block: '#a89a7f',
+      blockAlt: '#9c8f76',
+      road: '#3b3b44',
+      roadEdge: '#2c2c33',
+      laneDash: '#d8c56a',
+      sidewalk: '#c9bda1',
+      sand: '#e6cd96',
+      sandWet: '#d9bd85',
+      waterDeep: '#1d5f7a',
+      waterShallow: '#3d8ea8',
+      waterEdge: '#cfeef5',
+      pierWood: '#8a6a48',
+      pierEdge: '#6e5236',
+      buildingDowntown: '#5a6b7d',
+      buildingDowntownTop: '#7d93a8',
+      buildingBeach: '#d9a06a',
+      buildingBeachTop: '#eec39a',
+      buildingPort: '#8a6a4a',
+      buildingPortTop: '#a8845c',
+      buildingHouse: '#c9a06a',
+      windowLit: '#ffd27a',
+      windowDark: '#2c3844',
+      palmTrunk: '#7a5a38',
+      palmLeaf: '#3f7a44',
+      containerA: '#b0563a',
+      containerB: '#4a7a8a',
+      containerC: '#7a8a3a',
+      grass: '#7d9155',
+      parkPath: '#c9bda1'
+    },
+    // Named streets, for the HUD's street readout.
+    STREET_V: {
+      200: 'Coral Way', 600: 'Solano Ave', 1000: 'Marina Blvd',
+      1400: 'Cielo St', 1800: 'Palma Ave', 2200: 'Harbor Rd',
+      2600: 'Sunset Strip', 2900: 'Boardwalk Dr'
+    },
+    STREET_H: {
+      200: 'Northgate Rd', 600: 'Tropicana Ln', 1000: 'Pier St',
+      1400: 'Flamingo Ave', 1800: 'Docks Rd', 2200: 'Anchor Way'
+    }
+  };
+  CB.CFG = CFG;
 
-export const ROADS_X = [200, 600, 1000, 1400, 1800, 2200, 2600];
-export const ROADS_Y = [200, 600, 1000, 1400, 1800, 2200];
-export const STREET_NAMES_X = [
-  'Solano Ave', 'Marina Blvd', 'Coral St', 'Palma Ave',
-  'Harbor Rd', 'Sunset Way', 'Dune St',
-];
-export const STREET_NAMES_Y = [
-  'Cielo St', 'Bayview Ave', 'Tradewind Rd', 'Lantern St', 'Anchor Ave', 'Port Rd',
-];
-
-// Three districts of the original city of Cielo Bay.
-export const DISTRICTS = [
-  { id: 'downtown', name: 'Downtown', x0: 0, y0: 0, x1: 1500, y1: 1300,
-    ground: '#b99a6b', tall: true, heightMin: 46, heightMax: 120 },
-  { id: 'beachfront', name: 'Beachfront', x0: 2600, y0: 0, x1: 3200, y1: 2400,
-    ground: '#e8c98a', tall: false, heightMin: 14, heightMax: 34 },
-  { id: 'port', name: 'Port', x0: 0, y0: 1900, x1: 2600, y1: 2400,
-    ground: '#a08b6d', tall: false, heightMin: 18, heightMax: 44 },
-  { id: 'midtown', name: 'Midtown', x0: 1500, y0: 0, x1: 2600, y1: 1900,
-    ground: '#c2a273', tall: false, heightMin: 20, heightMax: 56 },
-];
-
-export function districtAt(x, y) {
-  if (x >= 2600) return DISTRICTS[1];
-  if (y >= 1900) return DISTRICTS[2];
-  if (x < 1500 && y < 1300) return DISTRICTS[0];
-  return DISTRICTS[3];
-}
-
-// Landmarks (original names).
-export const LANDMARKS = {
-  chopShop: { x: 2380, y: 2080, w: 150, h: 110, name: 'Rook Auto Yard' },
-  pier: { x0: 2820, y0: 940, x1: 3180, y1: 1060, name: 'Lantern Pier' },
-  beachX0: 2820,
-  waterX0: 3020,
-  portYard: { x0: 400, y0: 1980, x1: 2400, y1: 2340, name: 'Cielo Port Yard' },
-  plaza: { x: 1000, y: 1000, r: 130, name: 'Solano Plaza' },
-  hospital: { x: 1400, y: 600, name: 'Bay General' },
-  playerStart: { x: 600, y: 660 },
-};
-
-// The five-mission chain from fixer Mara Voss. Original story.
-export const MISSIONS = [
-  {
-    id: 'lift', name: 'The Lift',
-    briefing: "Mara Voss: There's a coral coupe parked by Solano Plaza. Lift it and bring it to Rook Auto Yard. Quietly.",
-    objective: 'Steal the marked coupe',
-    deliverObjective: 'Deliver the coupe to Rook Auto Yard',
-    reward: 500, respect: 10,
-  },
-  {
-    id: 'courier', name: 'Hot Courier',
-    briefing: 'Mara Voss: A package needs to cross town before the tide turns. Hit every checkpoint. The clock is real.',
-    objective: 'Reach the next checkpoint',
-    reward: 750, respect: 12,
-  },
-  {
-    id: 'heat', name: 'Cooling Off',
-    briefing: 'Mara Voss: You are too hot. Three stars and every cruiser in the bay is looking. Lose them. Stay out of sight.',
-    objective: 'Lose the heat — get to 0 stars',
-    reward: 1000, respect: 15,
-  },
-  {
-    id: 'pier', name: 'Pier Claim',
-    briefing: 'Mara Voss: The Tide Rats hold Lantern Pier and they owe me. Clear them out. Watch your back — they shoot.',
-    objective: 'Clear the rivals on Lantern Pier',
-    reward: 1200, respect: 20,
-  },
-  {
-    id: 'van', name: 'The Armored Van',
-    briefing: 'Mara Voss: One last job. An armored van sits in the port yard. Take it, survive four stars, and bring it home.',
-    objective: 'Take the armored van at the port',
-    deliverObjective: 'Deliver the van to Rook Auto Yard',
-    reward: 2500, respect: 30,
-  },
-];
-
-export const CAR_COLORS = [
-  '#c93a3a', '#3a7ac9', '#e8c93a', '#e8e8e8', '#3a3a3a',
-  '#5ac93a', '#c97a3a', '#8a3ac9', '#3ac9c9', '#d9a0b0',
-];
-export const POLICE_COLOR = '#2a4a8a';
-export const PLAYER_CAR_COLOR = '#c93a3a';
-
-export const PLAYER = {
-  walkSpeed: 195, runSpeed: 315, radius: 14, health: 100,
-  fireCooldown: 0.28, bulletSpeed: 780, bulletDamage: 34, meleeRange: 46, meleeDamage: 40,
-};
-
-export const CAR = {
-  accel: 560, brake: 900, reverseAccel: 320, maxSpeed: 540,
-  maxReverse: 180, turnRate: 2.6, grip: 6.5, driftGrip: 1.6,
-  radius: 20, trafficSpeed: 190, policeSpeed: 560, damageSmokeAt: 45,
-};
-
-export const WANTED = {
-  maxStars: 5, decayHiddenSeconds: 9, policePerStar: 1,
-  bustDistance: 46, bustHoldSeconds: 1.6,
-};
-
-export const GAME = {
-  saveKey: 'cielo-bay-save-v1',
-  trafficCount: 26, pedCount: 34, policeMax: 6,
-  missionRewardText: (m) => `+$${m.reward}  •  +${m.respect} respect`,
-};
+  // Vehicle definitions. accel is px/s^2, top is px/s, grip steers how
+  // sharply a car turns, drift how much the handbrake slides it.
+  CFG.CARS = {
+    sedan:   { w: 46, h: 22, accel: 420, top: 430, brake: 700, turn: 2.6, grip: 0.92, colors: ['#c94f43', '#4a7a8a', '#d8c56a', '#7a8a9a'] },
+    taxi:    { w: 46, h: 22, accel: 430, top: 440, brake: 720, turn: 2.7, grip: 0.92, colors: ['#e8b73a'] },
+    sport:   { w: 48, h: 22, accel: 620, top: 560, brake: 800, turn: 3.1, grip: 0.94, colors: ['#d83a2e', '#2e6ad8', '#e8e8e8'] },
+    super:   { w: 48, h: 21, accel: 780, top: 660, brake: 900, turn: 3.4, grip: 0.95, colors: ['#1a1a22', '#c9a227'] },
+    van:     { w: 56, h: 26, accel: 340, top: 360, brake: 600, turn: 2.2, grip: 0.90, colors: ['#8a8a92', '#5a6b7d'] },
+    armored: { w: 60, h: 28, accel: 380, top: 400, brake: 650, turn: 2.1, grip: 0.90, colors: ['#3a3f46'] },
+    truck:   { w: 62, h: 26, accel: 300, top: 330, brake: 550, turn: 2.0, grip: 0.88, colors: ['#b0563a', '#4a7a8a'] },
+    police:  { w: 48, h: 22, accel: 580, top: 540, brake: 850, turn: 3.0, grip: 0.94, colors: ['#1a2a3a'] }
+  };
+  // On-foot movement.
+  CFG.WALK_SPEED = 190;
+  CFG.RUN_SPEED = 305;
+  CFG.PLAYER_RADIUS = 13;
+  CFG.PLAYER_HP = 100;
+  CFG.PISTOL_DAMAGE = 34;
+  CFG.PISTOL_RANGE = 620;
+  CFG.BULLET_SPEED = 950;
+  CFG.MELEE_RANGE = 58;
+  CFG.MELEE_DAMAGE = 42;
+  // Wanted: points thresholds per star, and how heat cools off.
+  CFG.WANTED_POINTS = [0, 25, 60, 110, 170, 240];
+  CFG.CRIME_THEFT = 30;
+  CFG.CRIME_HIT_PED = 35;
+  CFG.CRIME_SHOT = 25;
+  CFG.CRIME_KILL = 60;
+  CFG.WITNESS_RADIUS = 380;
+  CFG.HEAT_HIDDEN_SECS = 8;
+  CFG.HEAT_DECAY_SECS = 2.2;
+  // Mission rewards (cash) and respect.
+  CFG.MISSION_REWARDS = [500, 750, 900, 1200, 2500];
+  CFG.MISSION_RESPECT = [10, 15, 20, 25, 40];
+  CFG.COURIER_TIME = 100;
+  CFG.CHASE_SURVIVE_SECS = 25;
+  // Traffic and crowd sizes.
+  CFG.TRAFFIC_COUNT = 14;
+  CFG.PARKED_COUNT = 10;
+  CFG.PED_COUNT = 18;
+  CFG.MAX_POLICE = 5;
+  // Save key.
+  CFG.SAVE_KEY = 'cielo-bay-save-v1';
+  CB.CFG = CFG;
+})();

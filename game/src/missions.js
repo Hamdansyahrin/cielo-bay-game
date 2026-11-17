@@ -1,233 +1,227 @@
-// missions.js — the five-mission chain from fixer Mara Voss, with phone-style
-// briefings, minimap markers, timers, checkpoints and cash + respect rewards.
-import { MISSIONS, WORLD } from './config.js';
-import { makeCar, updateTrafficCar } from './driving.js';
-import { spawnRival, nextCarId } from './entities.js';
-import { dist2, clamp } from './random.js';
-import { nearestRoadX, nearestRoadY } from './city.js';
+// Cielo Bay — missions.js: the five-job chain from fixer Mara Voss.
+// Each mission is a small state machine — a briefing on the phone, an
+// objective on the HUD and the minimap, and a cash + respect payout.
+// After the fifth, Cielo Bay is free roam.
+(function () {
+  'use strict';
+  var CB = window.CB = window.CB || {};
 
-export function makeMissionState() {
-  return {
-    index: 0,           // which mission is current (0-4); 5 = all done, free roam
-    phase: 'briefing',  // briefing | active | deliver | done
-    targetCar: null,
-    checkpoints: [],
-    checkpointIndex: 0,
-    timer: 0,
-    rivalsLeft: 0,
-    marker: null,       // {x, y, label} for the minimap + HUD
-    banner: null,
-    completedCount: 0,
-  };
-}
-
-export function currentMission(G) {
-  return G.missions.index < MISSIONS.length ? MISSIONS[G.missions.index] : null;
-}
-
-export function missionObjectiveText(G) {
-  const m = currentMission(G);
-  if (!m) return 'Free roam — Cielo Bay is yours';
-  const ms = G.missions;
-  if (ms.index === 0 && ms.phase === 'deliver') return m.deliverObjective;
-  if (ms.index === 4 && ms.phase === 'deliver') return m.deliverObjective;
-  if (ms.index === 1 && ms.checkpoints.length > 0) {
-    return `Checkpoint ${ms.checkpointIndex + 1} of ${ms.checkpoints.length} — ${Math.ceil(ms.timer)}s left`;
-  }
-  if (ms.index === 3) return `${m.objective} (${ms.rivalsLeft} left)`;
-  return m.objective;
-}
-
-export function startMission(G, index) {
-  const m = MISSIONS[index];
-  const ms = G.missions;
-  ms.index = index;
-  ms.phase = 'active';
-  ms.checkpoints = [];
-  ms.checkpointIndex = 0;
-  ms.timer = 0;
-  ms.rivalsLeft = 0;
-  ms.targetCar = null;
-  G.phone(m.briefing);
-  G.banner(m.name, m.briefing, 5);
-  if (index === 0) setupLiftMission(G);
-  if (index === 1) setupCourierMission(G);
-  if (index === 2) setupHeatMission(G);
-  if (index === 3) setupPierMission(G);
-  if (index === 4) setupVanMission(G);
-}
-
-function setupLiftMission(G) {
-  const ms = G.missions;
-  const car = makeCar({
-    id: nextCarId(), kind: 'mission',
-    x: 1000, y: 940, angle: 0,
-    color: '#e86a9a', driver: 'none',
-  });
-  car.missionMark = true;
-  G.cars.push(car);
-  ms.targetCar = car;
-  ms.marker = { x: car.x, y: car.y, label: 'Marked coupe' };
-}
-
-function setupCourierMission(G) {
-  const ms = G.missions;
-  ms.checkpoints = [
-    { x: 600, y: 600, r: 70 },
-    { x: 2200, y: 1400, r: 70 },
-    { x: 2600, y: 2200, r: 70 },
-    { x: 1000, y: 1800, r: 70 },
+  var MISSIONS = [
+    { title: 'Lift the Comet', giver: 'Mara Voss',
+      brief: 'Mara: There is a red Comet parked on Marina Blvd. Lift it and bring it to my chop shop on Solano Ave. Quietly, if you can.',
+      objective: 'Steal the marked Comet' },
+    { title: 'Sunset Courier', giver: 'Mara Voss',
+      brief: 'Mara: Four drops, one timer. Hit every checkpoint before the clock dies and the package is yours to keep. Drive like you mean it.',
+      objective: 'Hit all 4 courier checkpoints' },
+    { title: 'Lose the Heat', giver: 'Mara Voss',
+      brief: 'Mara: You are hot — three stars and every cruiser in the bay. Survive the chase, then go dark until the heat is gone.',
+      objective: 'Survive the chase, then lose the heat' },
+    { title: 'Take Back the Pier', giver: 'Mara Voss',
+      brief: 'Mara: The Vipers hold the pier and they are taxing my runners. Clear them out. Pistol work — watch the crossfire.',
+      objective: 'Clear the rivals off the pier' },
+    { title: 'The Armored Van', giver: 'Mara Voss',
+      brief: 'Mara: The big one. An armored van sits at the port. Take it, eat the four stars, and bring it to the chop shop. This buys your name.',
+      objective: 'Take the armored van to the chop shop' }
   ];
-  ms.checkpointIndex = 0;
-  ms.timer = 90;
-  ms.marker = { x: ms.checkpoints[0].x, y: ms.checkpoints[0].y, label: 'Checkpoint 1' };
-}
 
-function setupHeatMission(G) {
-  // Force three stars; the player must survive and lose them.
-  G.wanted = 3;
-  G.lastCrimeAt = G.time;
-  const ms = G.missions;
-  ms.timer = 75;
-  ms.marker = null;
-}
-
-function setupPierMission(G) {
-  const ms = G.missions;
-  const pier = G.city.pier;
-  const spots = [
-    { x: pier.x0 + 140, y: pier.y0 + 30 },
-    { x: pier.x0 + 260, y: pier.y1 - 30 },
-    { x: pier.x1 - 80, y: (pier.y0 + pier.y1) / 2 },
-  ];
-  for (const s of spots) spawnRival(G, s.x, s.y);
-  ms.rivalsLeft = 3;
-  ms.marker = { x: (pier.x0 + pier.x1) / 2, y: (pier.y0 + pier.y1) / 2, label: 'Lantern Pier' };
-}
-
-function setupVanMission(G) {
-  const ms = G.missions;
-  const yard = G.city.portYard;
-  const van = makeCar({
-    id: nextCarId(), kind: 'mission',
-    x: yard.x0 + 700, y: yard.y0 + 160, angle: Math.PI / 2,
-    color: '#3a3a3a', driver: 'none',
-  });
-  van.missionMark = true;
-  van.armored = true;
-  van.hp = 220;
-  G.cars.push(van);
-  ms.targetCar = van;
-  ms.marker = { x: van.x, y: van.y, label: 'Armored van' };
-}
-
-export function completeMission(G) {
-  const m = currentMission(G);
-  if (!m) return;
-  const ms = G.missions;
-  G.player.cash += m.reward;
-  G.player.respect += m.respect;
-  ms.completedCount += 1;
-  G.toast(`Mission complete: ${m.name} — +$${m.reward}, +${m.respect} respect`);
-  G.banner('Mission Complete', `${m.name} — +$${m.reward}  •  +${m.respect} respect`, 4);
-  if (typeof G.onMissionComplete === 'function') G.onMissionComplete(m);
-  ms.index += 1;
-  ms.phase = 'briefing';
-  ms.marker = null;
-  ms.targetCar = null;
-  if (ms.index >= MISSIONS.length) {
-    G.banner('Cielo Bay Is Yours', 'All five jobs done. Free roam — faster cars now spawn on the streets.', 6);
-    G.phone('Mara Voss: That is the whole set. The bay is yours now, kid. Drive like you own it.');
-    return;
+  function startMission(G, index) {
+    var m = MISSIONS[index];
+    if (!m) { G.mission = 5; G.freeRoam = true; return; }
+    G.mission = index;
+    var S = G.missionState = { index: index, phase: 'active', timer: 0, checkIndex: 0, surviveT: 0, hadThree: false };
+    CB.Audio.phone();
+    CB.toast(G, m.giver + ': ' + m.brief, 7);
+    CB.toast(G, 'NEW JOB — ' + m.title, 4);
+    if (index === 0) setupLift(G, S);
+    if (index === 1) setupCourier(G, S);
+    if (index === 2) setupChase(G, S);
+    if (index === 3) setupPier(G, S);
+    if (index === 4) setupVan(G, S);
+    CB.Save.write(G);
   }
-  startMission(G, ms.index);
-}
 
-export function failMission(G, reason) {
-  const m = currentMission(G);
-  if (!m) return;
-  G.banner('Job Failed', reason, 4);
-  G.phone(`Mara Voss: ${reason} Go back and try again — the job is still open.`);
-  startMission(G, G.missions.index);
-}
-
-// Called when the player enters any car (hook from main.js).
-export function onPlayerEnterCar(G, car) {
-  const ms = G.missions;
-  if (ms.index === 0 && ms.phase === 'active' && car === ms.targetCar) {
-    ms.phase = 'deliver';
-    ms.marker = { x: G.city.chopShop.x + G.city.chopShop.w / 2, y: G.city.chopShop.y + G.city.chopShop.h / 2, label: 'Rook Auto Yard' };
-    G.banner('Got it', 'Now deliver the coupe to Rook Auto Yard — avoid the heat.', 4);
-    return;
+  function setupLift(G, S) {
+    // The marked Comet: a red sport car parked on Marina Blvd.
+    var car = CB.makeCar(G, { x: G.city.missionCar.x, y: G.city.missionCar.y, angle: -Math.PI / 2,
+      model: 'sport', color: '#d83a2e', missionTarget: true });
+    G.cars.push(car);
+    S.targetCar = car;
+    S.phase = 'steal';
   }
-  if (ms.index === 4 && ms.phase === 'active' && car === ms.targetCar) {
-    ms.phase = 'deliver';
-    ms.marker = { x: G.city.chopShop.x + G.city.chopShop.w / 2, y: G.city.chopShop.y + G.city.chopShop.h / 2, label: 'Rook Auto Yard' };
-    if (typeof G.onCrime === 'function') G.onCrime('armored-van heist', 4, car.x, car.y);
-    G.banner('Four stars!', 'The whole bay is coming. Get the van to Rook Auto Yard.', 4);
+  function setupCourier(G, S) {
+    S.timer = CB.CFG.COURIER_TIME;
+    S.checkIndex = 0;
+    S.phase = 'courier';
   }
-}
+  function setupChase(G, S) {
+    // The heat is scripted on: three stars, cruisers already rolling.
+    CB.addCrime(G, 120);
+    S.surviveT = CB.CFG.CHASE_SURVIVE_SECS;
+    S.hadThree = true;
+    S.phase = 'survive';
+  }
+  function setupPier(G, S) {
+    // Four rivals hold the pier, pistols out.
+    var spots = [
+      { x: 3010, y: 990 }, { x: 3080, y: 1010 },
+      { x: 3140, y: 985 }, { x: 2980, y: 1020 }
+    ];
+    spots.forEach(function (s, i) {
+      G.rivals.push({ x: s.x, y: s.y, hp: 100, angle: Math.PI, state: 'fight',
+        shootT: 1 + i * 0.7, flash: 0, seed: i });
+    });
+    S.phase = 'clear';
+  }
+  function setupVan(G, S) {
+    S.phase = 'take';
+  }
 
-export function updateMissions(G, dt) {
-  const ms = G.missions;
-  const m = currentMission(G);
-  if (!m) return;
-  const p = G.player;
-  const px = p.car ? p.car.x : p.x;
-  const py = p.car ? p.car.y : p.y;
+  // Hooks the player module calls when a mission car is taken.
+  function onMissionCarTaken(G, car) {
+    var S = G.missionState;
+    if (G.mission === 0 && S && S.phase === 'steal' && car === S.targetCar) {
+      S.phase = 'deliver';
+      CB.toast(G, 'Got it. Now bring it to the chop shop on Solano Ave.', 4);
+    }
+  }
+  function onMissionVanTaken(G, car) {
+    var S = G.missionState;
+    if (G.mission === 4 && S && S.phase === 'take' && car.missionVan) {
+      S.phase = 'deliver';
+      CB.addCrime(G, 180);
+      CB.toast(G, 'Four stars! Lose them or outrun them — deliver the van!', 4);
+    }
+  }
 
-  // Deliveries: inside the chop-shop zone while driving the target car.
-  if (ms.phase === 'deliver' && p.car && p.car === ms.targetCar) {
-    const s = G.city.chopShop;
-    if (px > s.x && px < s.x + s.w && py > s.y && py < s.y + s.h) {
-      G.cars = G.cars.filter((c) => c !== ms.targetCar);
-      if (p.car === ms.targetCar) {
-        p.car = null; p.onFoot = true;
-        p.x = s.x + s.w / 2; p.y = s.y + s.h + 30;
+  CB.MISSIONS = MISSIONS;
+  CB.startMission = startMission;
+  CB.onMissionCarTaken = onMissionCarTaken;
+  CB.onMissionVanTaken = onMissionVanTaken;
+
+  function updateMissions(G, dt) {
+    var S = G.missionState;
+    if (!S || G.mission >= 5) return;
+    var shop = G.city.chopShop;
+    if (G.mission === 0) {
+      if (S.phase === 'deliver' && G.player.car === S.targetCar) {
+        if (Math.hypot(G.player.x - shop.x, G.player.y - shop.y) < shop.r) completeMission(G);
       }
-      completeMission(G);
-      return;
+    } else if (G.mission === 1) {
+      S.timer -= dt;
+      if (S.timer <= 0) {
+        CB.toast(G, 'Courier failed — the clock died. Mara gives you one more shot.', 4);
+        startMission(G, 1);
+        return;
+      }
+      var cp = G.city.courierPoints[S.checkIndex];
+      if (cp && Math.hypot(G.player.x - cp.x, G.player.y - cp.y) < 100) {
+        S.checkIndex++;
+        CB.Audio.pickup();
+        CB.toast(G, 'Drop ' + S.checkIndex + ' of 4 — ' + cp.name, 2.5);
+        if (S.checkIndex >= G.city.courierPoints.length) completeMission(G);
+      }
+    } else if (G.mission === 2) {
+      if (S.phase === 'survive') {
+        S.surviveT -= dt;
+        if (S.surviveT <= 0) {
+          S.phase = 'cool';
+          CB.toast(G, 'You lived. Now go dark until the heat is gone.', 4);
+        }
+      } else if (S.phase === 'cool' && G.wanted === 0) {
+        completeMission(G);
+      }
+    } else if (G.mission === 3) {
+      if (G.rivals.length > 0 && G.rivals.every(function (r) { return r.hp <= 0; })) completeMission(G);
+    } else if (G.mission === 4) {
+      if (S.phase === 'deliver' && G.player.car && G.player.car.missionVan) {
+        if (Math.hypot(G.player.x - shop.x, G.player.y - shop.y) < shop.r) completeMission(G);
+      }
+    }
+    updateRivals(G, dt);
+  }
+
+  // Rivals on the pier shoot at the player when close enough.
+  function updateRivals(G, dt) {
+    var p = G.player;
+    G.rivals.forEach(function (r) {
+      if (r.hp <= 0) return;
+      r.flash = Math.max(0, (r.flash || 0) - dt);
+      var d = Math.hypot(p.x - r.x, p.y - r.y);
+      if (d > 560) return;
+      r.angle = Math.atan2(p.y - r.y, p.x - r.x);
+      // Strafe slowly to keep the fight moving.
+      r.x += Math.cos(r.angle + Math.PI / 2) * Math.sin(G.time * 0.7 + r.seed) * 22 * dt;
+      r.y += Math.sin(r.angle + Math.PI / 2) * Math.sin(G.time * 0.7 + r.seed) * 22 * dt;
+      r.shootT -= dt;
+      if (r.shootT <= 0 && d < 520) {
+        r.shootT = G.rng.range(0.9, 1.6);
+        var a = r.angle + G.rng.range(-0.12, 0.12);
+        G.bullets.push({ x: r.x + Math.cos(a) * 20, y: r.y + Math.sin(a) * 20,
+          vx: Math.cos(a) * 700, vy: Math.sin(a) * 700,
+          life: 520 / 700, dmg: 8, from: 'rival' });
+        CB.Audio.rivalShot();
+        G.particles.push({ x: r.x + Math.cos(a) * 22, y: r.y + Math.sin(a) * 22,
+          vx: 0, vy: 0, life: 0.08, maxLife: 0.08, color: '#ffd27a', size: 7, kind: 'dot' });
+      }
+    });
+  }
+
+  function completeMission(G) {
+    var index = G.mission;
+    var reward = CB.CFG.MISSION_REWARDS[index] || 0;
+    var respect = CB.CFG.MISSION_RESPECT[index] || 0;
+    G.cash += reward;
+    G.respect += respect;
+    G.mission = index + 1;
+    G.unlocked = Math.max(G.unlocked, index + 1);
+    CB.Audio.missionDone();
+    CB.toast(G, 'JOB DONE — ' + MISSIONS[index].title + '  +$' + reward + '  +' + respect + ' respect', 5);
+    CB.Save.write(G);
+    if (G.mission < 5) {
+      setTimeout(function () { if (G.screen === 'playing') startMission(G, G.mission); }, 2500);
+    } else {
+      G.freeRoam = true;
+      CB.toast(G, 'Free roam — Cielo Bay is yours. Mara will call when there is work.', 6);
     }
   }
 
-  if (ms.index === 1 && ms.phase === 'active') {
-    ms.timer -= dt;
-    const cp = ms.checkpoints[ms.checkpointIndex];
-    if (cp && dist2(px, py, cp.x, cp.y) < cp.r * cp.r) {
-      ms.checkpointIndex += 1;
-      G.toast(`Checkpoint ${ms.checkpointIndex} of ${ms.checkpoints.length} — nice driving`);
-      if (ms.checkpointIndex >= ms.checkpoints.length) { completeMission(G); return; }
-      const next = ms.checkpoints[ms.checkpointIndex];
-      ms.marker = { x: next.x, y: next.y, label: `Checkpoint ${ms.checkpointIndex + 1}` };
+  function objectiveText(G) {
+    if (G.mission >= 5) return 'Free roam — Cielo Bay is yours';
+    var S = G.missionState;
+    var m = MISSIONS[G.mission];
+    if (!S) return m.objective;
+    if (G.mission === 0) return S.phase === 'steal' ? 'Steal the marked Comet on Marina Blvd' : 'Deliver the Comet to the chop shop — Solano Ave';
+    if (G.mission === 1) return 'Courier: drop ' + (S.checkIndex + 1) + ' of 4 — ' + Math.ceil(S.timer) + 's left';
+    if (G.mission === 2) return S.phase === 'survive' ? 'Survive the 3-star chase — ' + Math.ceil(S.surviveT) + 's' : 'Lose the heat — stay out of sight';
+    if (G.mission === 3) {
+      var left = G.rivals.filter(function (r) { return r.hp > 0; }).length;
+      return 'Clear the pier — ' + left + ' rival' + (left === 1 ? '' : 's') + ' left';
     }
-    if (ms.timer <= 0) failMission(G, 'The courier run timed out.');
+    if (G.mission === 4) return S.phase === 'take' ? 'Take the armored van at the port' : 'Deliver the van to the chop shop — 4 stars!';
+    return m.objective;
   }
 
-  if (ms.index === 2 && ms.phase === 'active') {
-    ms.timer -= dt;
-    if (G.wanted === 0) { completeMission(G); return; }
-    if (ms.timer <= 0) failMission(G, 'You stayed too hot for too long.');
+  function missionMarker(G) {
+    if (G.mission >= 5) return null;
+    var S = G.missionState;
+    if (G.mission === 0) return S.phase === 'steal' && S.targetCar ? { x: S.targetCar.x, y: S.targetCar.y } : { x: G.city.chopShop.x, y: G.city.chopShop.y };
+    if (G.mission === 1) { var cp = G.city.courierPoints[S.checkIndex]; return cp ? { x: cp.x, y: cp.y } : null; }
+    if (G.mission === 2) return null;
+    if (G.mission === 3) return { x: G.city.pierMeet.x, y: G.city.pierMeet.y };
+    if (G.mission === 4) return S.phase === 'take' ? { x: G.city.vanSpawn.x, y: G.city.vanSpawn.y } : { x: G.city.chopShop.x, y: G.city.chopShop.y };
+    return null;
   }
 
-  if (ms.index === 3 && ms.phase === 'active') {
-    const alive = G.peds.filter((r) => r.kind === 'rival' && r.state !== 'down').length;
-    ms.rivalsLeft = alive;
-    if (alive === 0) { completeMission(G); return; }
+  // Debug jump used by the playtest driver: restart cleanly at a mission.
+  function setMission(G, index) {
+    G.rivals = [];
+    G.missionState = null;
+    startMission(G, index);
   }
 
-  // Mission 1 fail-safe: if the marked car is destroyed, respawn the job.
-  if (ms.index === 0 && ms.phase === 'active' && ms.targetCar && ms.targetCar.hp <= 0) {
-    G.cars = G.cars.filter((c) => c !== ms.targetCar);
-    failMission(G, 'The marked coupe was wrecked.');
-  }
-  if (ms.index === 4 && ms.phase === 'active' && ms.targetCar && ms.targetCar.hp <= 0) {
-    G.cars = G.cars.filter((c) => c !== ms.targetCar);
-    failMission(G, 'The armored van was wrecked.');
-  }
-}
-
-// Progression: after missions, faster cars spawn in traffic.
-export function trafficCruiseFor(G) {
-  const done = G.missions.completedCount;
-  return 150 + done * 22 + (G.rng() < 0.12 ? 130 : 0);
-}
+  CB.updateMissions = updateMissions;
+  CB.completeMission = completeMission;
+  CB.objectiveText = objectiveText;
+  CB.missionMarker = missionMarker;
+  CB.setMission = setMission;
+})();

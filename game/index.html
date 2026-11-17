@@ -3,15 +3,29 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cielo Bay — steal cars, run the fixer's jobs, outrun the heat</title>
-<link rel="icon" href="data:,">
+<title>Cielo Bay — steal cars, run the fixer's missions, outrun the heat</title>
 <style>
-  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #1a1030; }
-  #game { display: block; width: 100vw; height: 100vh; cursor: crosshair; }
+  html, body { margin: 0; padding: 0; background: #14101c; height: 100%; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; width: 1280px; height: 720px; max-width: 100vw; max-height: 100vh;
+    background: #2a1a3a; image-rendering: auto; }
 </style>
 </head>
 <body>
-<canvas id="game"></canvas>
-<script type="module" src="./src/main.js"></script>
+<canvas id="game" width="1280" height="720"></canvas>
+<script src="src/config.js"></script>
+<script src="src/random.js"></script>
+<script src="src/city.js"></script>
+<script src="src/audio.js"></script>
+<script src="src/save.js"></script>
+<script src="src/entities.js"></script>
+<script src="src/player.js"></script>
+<script src="src/driving.js"></script>
+<script src="src/police.js"></script>
+<script src="src/missions.js"></script>
+<script src="src/hud.js"></script>
+<script src="src/render.js"></script>
+<script src="src/shots.js"></script>
+<script src="src/main.js"></script>
 </body>
 </html>

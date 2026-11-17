@@ -1,161 +1,224 @@
-// player.js — the player on foot (move, run, aim, shoot, melee) and
-// entering / exiting any car, including stealing one in view of witnesses.
-import { PLAYER, CAR, WORLD } from './config.js';
-import { clamp, dist2 } from './random.js';
-import { pushOutOfSolids, inWater, onPier } from './city.js';
-import { makeCar } from './driving.js';
+// Cielo Bay — player.js: the player on foot — WASD/arrows to walk, Shift
+// to run, mouse to aim, click to fire the pistol, F or right-click to
+// swing a melee hit, E to enter or leave any car. Stealing a car someone
+// can see is a crime; the wanted system hears about it from here.
+(function () {
+  'use strict';
+  var CB = window.CB = window.CB || {};
 
-export function makePlayer(start) {
-  return {
-    x: start.x, y: start.y, angle: -Math.PI / 2, aimAngle: -Math.PI / 2,
-    vx: 0, vy: 0, health: PLAYER.health, maxHealth: PLAYER.health,
-    cash: 0, respect: 0,
-    onFoot: true, car: null,
-    fireCd: 0, meleeCd: 0, meleeAnim: 0, hurtFlash: 0,
-    runStamina: 1, lastRegenAt: 0,
-  };
-}
+  function nearestCar(G, maxDist) {
+    var best = null, bestD = maxDist;
+    G.cars.forEach(function (car) {
+      if (car.wrecked) return;
+      var d = Math.hypot(car.x - G.player.x, car.y - G.player.y);
+      if (d < bestD) { bestD = d; best = car; }
+    });
+    return best;
+  }
 
-// On-foot update. input: {up,down,left,right,run}, mouse in world coords.
-export function updatePlayerOnFoot(G, p, input, mouseWorld, dt) {
-  let mx = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-  let my = (input.down ? 1 : 0) - (input.up ? 1 : 0);
-  const len = Math.hypot(mx, my);
-  if (len > 0) { mx /= len; my /= len; }
-  const running = input.run && len > 0 && p.runStamina > 0.05;
-  const speed = running ? PLAYER.runSpeed : PLAYER.walkSpeed;
-  if (running) p.runStamina = Math.max(0, p.runStamina - dt * 0.25);
-  else p.runStamina = Math.min(1, p.runStamina + dt * 0.15);
-  p.vx = mx * speed; p.vy = my * speed;
-  p.x += p.vx * dt;
-  p.y += p.vy * dt;
-  p.x = clamp(p.x, 24, WORLD.W - 24);
-  p.y = clamp(p.y, 24, WORLD.H - 24);
-  if (inWater(G.city, p.x)) { p.x = G.city.waterX0 - 18; }
-  if (len > 0) p.angle = Math.atan2(my, mx);
-  p.aimAngle = Math.atan2(mouseWorld.y - p.y, mouseWorld.x - p.x);
-  pushOutOfSolids(G.city, p, PLAYER.radius);
-  // Slow health regen when out of combat.
-  if (G.time - p.lastRegenAt > 1) {
-    p.lastRegenAt = G.time;
-    if (p.health > 0 && p.health < p.maxHealth && G.wanted === 0) {
-      p.health = Math.min(p.maxHealth, p.health + 1.5);
+  function updateOnFoot(G, dt) {
+    var p = G.player;
+    var keys = G.keys;
+    var mx = (keys['KeyD'] || keys['ArrowRight'] ? 1 : 0) - (keys['KeyA'] || keys['ArrowLeft'] ? 1 : 0);
+    var my = (keys['KeyS'] || keys['ArrowDown'] ? 1 : 0) - (keys['KeyW'] || keys['ArrowUp'] ? 1 : 0);
+    var running = keys['ShiftLeft'] || keys['ShiftRight'];
+    var speed = running ? CB.CFG.RUN_SPEED : CB.CFG.WALK_SPEED;
+    if (mx !== 0 || my !== 0) {
+      var len = Math.hypot(mx, my);
+      var vx = (mx / len) * speed, vy = (my / len) * speed;
+      // Move axis by axis so walls slide instead of sticking.
+      var nx = p.x + vx * dt;
+      if (!G.city.blocked(nx, p.y, CB.CFG.PLAYER_RADIUS)) p.x = nx;
+      var ny = p.y + vy * dt;
+      if (!G.city.blocked(p.x, ny, CB.CFG.PLAYER_RADIUS)) p.y = ny;
+      p.moving = true;
+      p.faceAngle = Math.atan2(vy, vx);
+    } else {
+      p.moving = false;
+    }
+    // Aim follows the mouse, in world space.
+    var wx = G.camera.x + G.mouse.x, wy = G.camera.y + G.mouse.y;
+    p.aimAngle = Math.atan2(wy - p.y, wx - p.x);
+    // Pistol: hold to fire, one shot per cooldown.
+    p.fireCooldown = Math.max(0, (p.fireCooldown || 0) - dt);
+    if (G.mouse.down && p.fireCooldown <= 0 && G.screen === 'playing') {
+      firePistol(G);
+      p.fireCooldown = 0.28;
+    }
+    // Melee swing on F or right mouse.
+    p.meleeCooldown = Math.max(0, (p.meleeCooldown || 0) - dt);
+    if ((keys['KeyF'] || G.mouse.right) && p.meleeCooldown <= 0) {
+      meleeSwing(G);
+      p.meleeCooldown = 0.45;
+    }
+    // Slow health regen when calm and unhurt for a while.
+    p.hurtTimer = Math.max(0, (p.hurtTimer || 0) - dt);
+    if (p.hurtTimer <= 0 && p.hp < p.maxHp && G.wanted === 0) {
+      p.hp = Math.min(p.maxHp, p.hp + 4 * dt);
     }
   }
-  p.fireCd -= dt; p.meleeCd -= dt; p.meleeAnim -= dt; p.hurtFlash -= dt;
-}
 
-// Fire the pistol toward the mouse. Returns true when a shot was fired.
-export function playerShoot(G, p, mouseWorld) {
-  if (p.fireCd > 0 || p.onFoot === false) return false;
-  p.fireCd = PLAYER.fireCooldown;
-  const a = Math.atan2(mouseWorld.y - p.y, mouseWorld.x - p.x);
-  p.aimAngle = a;
-  G.bullets.push({
-    x: p.x + Math.cos(a) * 22, y: p.y + Math.sin(a) * 22,
-    vx: Math.cos(a) * PLAYER.bulletSpeed, vy: Math.sin(a) * PLAYER.bulletSpeed,
-    from: 'player', damage: PLAYER.bulletDamage, life: 1.1, t: 0,
-  });
-  G.particles.push({ kind: 'flash', x: p.x + Math.cos(a) * 24, y: p.y + Math.sin(a) * 24, vx: 0, vy: 0, life: 0.07, t: 0, size: 10 });
-  if (typeof G.onShot === 'function') G.onShot(p.x, p.y);
-  if (typeof G.onCrime === 'function') G.onCrime('shots-fired', 1, p.x, p.y);
-  return true;
-}
+  function firePistol(G) {
+    var p = G.player;
+    var a = p.aimAngle;
+    G.bullets.push({
+      x: p.x + Math.cos(a) * 20, y: p.y + Math.sin(a) * 20,
+      vx: Math.cos(a) * CB.CFG.BULLET_SPEED, vy: Math.sin(a) * CB.CFG.BULLET_SPEED,
+      life: CB.CFG.PISTOL_RANGE / CB.CFG.BULLET_SPEED, dmg: CB.CFG.PISTOL_DAMAGE, from: 'player'
+    });
+    CB.Audio.shot();
+    G.muzzle = 0.06;
+    // A shot in earshot of a witness is a crime.
+    var seen = witnessNearby(G, p.x, p.y);
+    if (seen) CB.addCrime(G, CB.CFG.CRIME_SHOT);
+    else if (G.wanted === 0 && G.rng.chance(0.0)) { /* unheard shots stay quiet */ }
+    // Peds near the shot flee.
+    G.peds.forEach(function (ped) {
+      if (Math.hypot(ped.x - p.x, ped.y - p.y) < 320) ped.state = 'flee';
+    });
+  }
 
-// Melee swing: hits rivals (and peds) in front of the player.
-export function playerMelee(G, p) {
-  if (p.meleeCd > 0) return false;
-  p.meleeCd = 0.45; p.meleeAnim = 0.25;
-  let hitAny = false;
-  for (const ped of G.peds) {
-    if (ped.state === 'down') continue;
-    const d = Math.hypot(ped.x - p.x, ped.y - p.y);
-    if (d < PLAYER.meleeRange + 14) {
-      const a = Math.atan2(ped.y - p.y, ped.x - p.x);
-      const diff = Math.abs(((a - p.aimAngle + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
-      if (diff < 1.1) {
-        ped.hp -= PLAYER.meleeDamage;
-        ped.state = ped.kind === 'rival' ? 'fight' : 'down';
-        ped.stateT = ped.kind === 'rival' ? 0 : 3;
-        if (ped.hp <= 0) { ped.state = 'down'; ped.stateT = 9999; }
-        hitAny = true;
-        G.particles.push({ kind: 'flash', x: ped.x, y: ped.y, vx: 0, vy: 0, life: 0.12, t: 0, size: 8 });
+  function meleeSwing(G) {
+    var p = G.player;
+    var a = p.aimAngle;
+    var hx = p.x + Math.cos(a) * 40, hy = p.y + Math.sin(a) * 40;
+    CB.Audio.melee();
+    G.particles.push({ x: hx, y: hy, vx: 0, vy: 0, life: 0.15, maxLife: 0.15, color: '#e8e8e8', size: 26, kind: 'ring' });
+    // Hit a rival in range.
+    G.rivals.forEach(function (r) {
+      if (r.hp > 0 && Math.hypot(r.x - hx, r.y - hy) < 46) {
+        damageRival(G, r, CB.CFG.MELEE_DAMAGE);
+        r.x += Math.cos(a) * 26; r.y += Math.sin(a) * 26;
+      }
+    });
+  }
+
+  // Is any pedestrian or police car close enough to witness a crime?
+  function witnessNearby(G, x, y) {
+    var r = CB.CFG.WITNESS_RADIUS;
+    for (var i = 0; i < G.peds.length; i++) {
+      if (Math.hypot(G.peds[i].x - x, G.peds[i].y - y) < r) return true;
+    }
+    for (var j = 0; j < G.police.length; j++) {
+      if (Math.hypot(G.police[j].x - x, G.police[j].y - y) < r) return true;
+    }
+    return false;
+  }
+
+  function damageRival(G, rival, dmg) {
+    rival.hp -= dmg;
+    rival.flash = 0.12;
+    G.particles.push({ x: rival.x, y: rival.y, vx: 0, vy: -30, life: 0.4, maxLife: 0.4, color: '#d83a2e', size: 6, kind: 'dot' });
+    if (rival.hp <= 0) {
+      rival.state = 'down';
+      rival.downAt = G.time;
+      CB.addCrime(G, CB.CFG.CRIME_KILL);
+      CB.toast(G, 'Rival down — ' + (G.rivals.filter(function (q) { return q.hp > 0; }).length) + ' left', 2.5);
+    }
+  }
+
+  CB.updateOnFoot = updateOnFoot;
+  CB.nearestCar = nearestCar;
+  CB.witnessNearby = witnessNearby;
+  CB.damageRival = damageRival;
+  CB.firePistol = firePistol;
+
+  // E: get in the nearest car, or get out of the one being driven.
+  // Taking a car that is not yours is theft when anyone sees it.
+  function enterExitCar(G) {
+    var p = G.player;
+    if (p.car) {
+      exitCar(G);
+      return;
+    }
+    var car = nearestCar(G, 72);
+    if (!car) return;
+    if (car.isPolice) return; // police cars stay locked
+    var stolen = car.isTraffic || car.isParked || car.missionTarget || car.missionVan;
+    p.car = car;
+    car.isPlayer = true;
+    car.isTraffic = false;
+    car.isParked = false;
+    car.ai = null;
+    p.onFoot = false;
+    CB.Audio.setEngine(0, true);
+    if (stolen) {
+      if (witnessNearby(G, car.x, car.y)) {
+        CB.addCrime(G, CB.CFG.CRIME_THEFT);
+        CB.toast(G, 'Stolen — someone saw you!', 3);
+      } else {
+        CB.toast(G, 'Car taken — nobody saw a thing', 2.5);
       }
     }
+    if (car.missionTarget) CB.onMissionCarTaken(G, car);
+    if (car.missionVan) CB.onMissionVanTaken(G, car);
   }
-  return hitAny;
-}
 
-// Nearest car the player can enter (within 56px).
-export function nearestEnterableCar(G, p) {
-  let best = null, bd = 56 * 56;
-  for (const car of G.cars) {
-    if (car.driver === 'player') continue;
-    const d2 = dist2(car.x, car.y, p.x, p.y);
-    if (d2 < bd) { bd = d2; best = car; }
-  }
-  return best;
-}
-
-function witnessesNear(G, x, y, radius) {
-  let count = 0;
-  for (const ped of G.peds) {
-    if (ped.state !== 'down' && dist2(ped.x, ped.y, x, y) < radius * radius) count++;
-  }
-  for (const car of G.cars) {
-    if (car.kind === 'traffic' && dist2(car.x, car.y, x, y) < radius * radius) count++;
-  }
-  return count;
-}
-
-// Enter a car. Stealing a parked or traffic car in view of witnesses raises wanted.
-export function enterCar(G, p, car) {
-  if (!car) return false;
-  const wasParked = car.kind === 'parked';
-  const wasTraffic = car.kind === 'traffic';
-  const stolen = wasParked || wasTraffic;
-  if (stolen) {
-    const witnesses = witnessesNear(G, car.x, car.y, 320);
-    if (witnesses > 0 && typeof G.onCrime === 'function') {
-      G.onCrime('car-theft', 1, car.x, car.y);
+  function exitCar(G) {
+    var p = G.player;
+    var car = p.car;
+    if (!car) return;
+    // Step out on the car's left side, clear of walls.
+    var sx = car.x - Math.sin(car.angle) * 34, sy = car.y + Math.cos(car.angle) * 34;
+    if (G.city.blocked(sx, sy, CB.CFG.PLAYER_RADIUS)) {
+      sx = car.x + Math.sin(car.angle) * 34; sy = car.y - Math.cos(car.angle) * 34;
     }
-    G.toast(`You took the ${car.color === '#c93a3a' ? 'red' : 'parked'} car${witnesses > 0 ? ' — someone saw that!' : ''}`);
+    p.x = sx; p.y = sy;
+    p.car = null;
+    p.onFoot = true;
+    car.isPlayer = false;
+    car.speed = Math.max(0, car.speed * 0.2);
+    CB.Audio.setEngine(0, false);
   }
-  car.kind = 'player';
-  car.driver = 'player';
-  car.vx = 0; car.vy = 0;
-  p.car = car;
-  p.onFoot = false;
-  p.x = car.x; p.y = car.y;
-  if (typeof G.onEnterCar === 'function') G.onEnterCar(car);
-  return true;
-}
 
-// Step out of the car onto the road beside it.
-export function exitCar(G, p) {
-  const car = p.car;
-  if (!car) return false;
-  car.kind = 'traffic';
-  car.driver = 'ai';
-  car.axis = Math.abs(Math.cos(car.angle)) > Math.abs(Math.sin(car.angle)) ? 'x' : 'y';
-  // Re-anchor the car onto the road grid so traffic AI can take over.
-  if (car.axis === 'x') {
-    car.road = car.y;
-    car.dir = Math.cos(car.angle) >= 0 ? 1 : -1;
-  } else {
-    car.road = car.x;
-    car.dir = Math.sin(car.angle) >= 0 ? 1 : -1;
+  function damagePlayer(G, dmg) {
+    var p = G.player;
+    if (p.hp <= 0) return;
+    p.hp -= dmg;
+    p.hurtTimer = 4;
+    G.shake = Math.min(14, G.shake + 6);
+    if (p.hp <= 0) {
+      p.hp = 0;
+      G.screen = 'wasted';
+      G.cash = Math.max(0, G.cash - 150);
+      CB.Audio.setEngine(0, false);
+    }
   }
-  car.cruise = 170;
-  car.speed = Math.min(car.speed, 120);
-  const side = { x: -Math.sin(car.angle), y: Math.cos(car.angle) };
-  p.x = car.x + side.x * 34;
-  p.y = car.y + side.y * 34;
-  p.x = clamp(p.x, 24, WORLD.W - 24);
-  p.y = clamp(p.y, 24, WORLD.H - 24);
-  pushOutOfSolids(G.city, p, PLAYER.radius);
-  p.onFoot = true;
-  p.car = null;
-  p.vx = 0; p.vy = 0;
-  return true;
-}
+
+  // Bullets fly, spark on walls, and hit rivals or the player.
+  function updateBullets(G, dt) {
+    for (var i = G.bullets.length - 1; i >= 0; i--) {
+      var b = G.bullets[i];
+      b.x += b.vx * dt; b.y += b.vy * dt;
+      b.life -= dt;
+      var dead = b.life <= 0;
+      if (!dead && G.city.blocked(b.x, b.y, 2)) {
+        dead = true;
+        G.particles.push({ x: b.x, y: b.y, vx: 0, vy: 0, life: 0.15, maxLife: 0.15, color: '#ffd27a', size: 5, kind: 'dot' });
+      }
+      if (!dead && b.from === 'player') {
+        for (var j = 0; j < G.rivals.length; j++) {
+          var r = G.rivals[j];
+          if (r.hp > 0 && Math.hypot(r.x - b.x, r.y - b.y) < 16) {
+            damageRival(G, r, b.dmg);
+            dead = true;
+            break;
+          }
+        }
+      }
+      if (!dead && b.from === 'rival') {
+        var p = G.player;
+        if (p.onFoot && Math.hypot(p.x - b.x, p.y - b.y) < 14) {
+          damagePlayer(G, 8);
+          dead = true;
+        }
+      }
+      if (dead) G.bullets.splice(i, 1);
+    }
+  }
+
+  CB.enterExitCar = enterExitCar;
+  CB.exitCar = exitCar;
+  CB.damagePlayer = damagePlayer;
+  CB.updateBullets = updateBullets;
+})();

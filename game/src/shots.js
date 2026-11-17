@@ -1,121 +1,116 @@
-// shots.js — deterministic ?shot= scene posing for the screenshots.
-// Each scene sets up a busy frame (HUD + minimap + wanted + objective) and
-// then the game sets window.__shot = "ready" once a frame has been drawn.
-import { makeCar } from './driving.js';
-import { spawnRival, nextCarId } from './entities.js';
+// Cielo Bay — shots.js: poses the four deterministic screenshot scenes
+// from ?shot=, with a fixed seed. Each scene starts the game for real,
+// stages traffic, peds, police or rivals around the camera, freezes the
+// simulation so the frame is stable, and sets window.__shot = "ready"
+// once a couple of frames have rendered.
+(function () {
+  'use strict';
+  var CB = window.CB = window.CB || {};
 
-export const SHOT_QUERIES = {
-  cover: '?shot=cover&seed=1',
-  drive: '?shot=drive&seed=1',
-  chase: '?shot=chase&seed=1',
-  mission: '?shot=mission&seed=1',
-};
-
-export function poseShot(G, name) {
-  const p = G.player;
-  // A fixed seed keeps every shot reproducible.
-  G.rng = (function (seed) {
-    let a = seed >>> 0;
-    return function () {
-      a |= 0; a = (a + 0x6D2B79F5) | 0;
-      let t = Math.imul(a ^ (a >>> 15), 1 | a);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-  })(1);
-  G.screen = 'playing';
-  G.time = 12;
-
-  if (name === 'cover') {
-    // Downtown on foot, traffic + pedestrians + minimap + mission 1 objective.
-    p.x = 600; p.y = 660; p.onFoot = true; p.car = null;
-    p.aimAngle = -Math.PI / 2;
-    G.missions.index = 0; G.missions.phase = 'active';
-    G.missions.marker = { x: 1000, y: 940, label: 'Marked coupe' };
-    G.banner('The Lift', "Mara Voss: There's a coral coupe parked by Solano Plaza. Lift it.", 8);
-    placeTrafficNear(G, 600, 660, 8);
-    placePedsNear(G, 600, 660, 8);
-  } else if (name === 'drive') {
-    // Driving the beachfront road, sunset water on the right.
-    const car = makeCar({ id: nextCarId(), kind: 'player', x: 2600, y: 1300, angle: -Math.PI / 2, color: '#c93a3a', driver: 'player' });
-    car.speed = 380; car.vx = 0; car.vy = -380;
-    G.cars.push(car);
-    p.car = car; p.onFoot = false; p.x = car.x; p.y = car.y;
-    G.missions.index = 1; G.missions.phase = 'active';
-    G.missions.checkpoints = [{ x: 2600, y: 600, r: 70 }];
-    G.missions.checkpointIndex = 0; G.missions.timer = 45;
-    G.missions.marker = { x: 2600, y: 600, label: 'Checkpoint 1' };
-    G.banner('Hot Courier', 'Checkpoint 1 of 4 — 45s left. The tide is turning.', 8);
-    placeTrafficNear(G, 2600, 1300, 6);
-    placePedsNear(G, 2600, 1300, 4);
-  } else if (name === 'chase') {
-    // Police pursuit at 3 stars, objective banner up.
-    const car = makeCar({ id: nextCarId(), kind: 'player', x: 1400, y: 1400, angle: 0, color: '#3a7ac9', driver: 'player' });
-    car.speed = 420; car.vx = 420; car.vy = 0;
-    G.cars.push(car);
-    p.car = car; p.onFoot = false; p.x = car.x; p.y = car.y;
-    G.wanted = 3;
-    G.missions.index = 2; G.missions.phase = 'active';
-    G.missions.timer = 42;
-    G.missions.marker = null;
-    G.banner('Cooling Off', 'Three stars. Lose the heat — get to 0 stars.', 8);
-    for (let i = 0; i < 3; i++) {
-      const pc = makeCar({
-        id: nextCarId(), kind: 'police',
-        x: 1400 - 180 - i * 90, y: 1400 + (i - 1) * 50, angle: 0,
-        color: '#2a4a8a', driver: 'ai', axis: 'x', road: 1400, dir: 1, lane: 14, cruise: 420,
+  function poseScene(G, shot) {
+    G.screen = 'playing';
+    G.shotMode = shot;
+    var rng = G.rng;
+    if (shot === 'cover') {
+      // Downtown on foot: player at the Cielo St / Tropicana crossing,
+      // traffic rolling past, peds on the sidewalk, job 1 on the banner.
+      G.player.x = 1420; G.player.y = 640;
+      G.player.onFoot = true; G.player.car = null;
+      G.player.aimAngle = -0.5;
+      scatterTraffic(G, 1420, 640, 5);
+      scatterPeds(G, 1420, 640, 6);
+    } else if (shot === 'drive') {
+      // Driving the beachfront road north, sun on the water.
+      var car = CB.makeCar(G, { x: 2900, y: 1560, angle: -Math.PI / 2, model: 'sport', color: '#d83a2e' });
+      G.cars.push(car);
+      G.player.car = car; car.isPlayer = true;
+      G.player.onFoot = false;
+      car.speed = 300;
+      G.player.x = car.x; G.player.y = car.y;
+      scatterTraffic(G, 2900, 1400, 4);
+      scatterPeds(G, 2900, 1300, 3);
+      CB.setMission(G, 1);
+      G.missionState.timer = 87;
+    } else if (shot === 'chase') {
+      // Three-star pursuit: the player flees north on Cielo St with
+      // three cruisers on their tail and job 3 on the banner.
+      var chaseCar = CB.makeCar(G, { x: 1400, y: 1500, angle: -Math.PI / 2, model: 'sport', color: '#2e6ad8' });
+      G.cars.push(chaseCar);
+      G.player.car = chaseCar; chaseCar.isPlayer = true;
+      G.player.onFoot = false;
+      chaseCar.speed = 380;
+      G.player.x = chaseCar.x; G.player.y = chaseCar.y;
+      CB.setMission(G, 2);
+      G.missionState.surviveT = 19;
+      G.wanted = 3;
+      G.wantedPoints = 120;
+      G.lastCrimeAt = G.time; G.lastSeenAt = G.time;
+      [[1400, 1720], [1340, 1660], [1000, 1500]].forEach(function (pos) {
+        var pc = CB.spawnPoliceCar(G, pos[0], pos[1]);
+        pc.x = pos[0]; pc.y = pos[1];
+        pc.angle = -Math.PI / 2;
+        pc.speed = 330;
       });
-      pc.speed = 420; pc.blinker = i * 2;
-      G.cars.push(pc);
+      scatterTraffic(G, 1400, 1300, 3);
+    } else if (shot === 'mission') {
+      // The pier job: the player on foot at the pier mouth, aiming at
+      // the Vipers holding the deck.
+      CB.setMission(G, 3);
+      G.player.x = 2960; G.player.y = 1000;
+      G.player.onFoot = true; G.player.car = null;
+      G.player.aimAngle = 0.1;
+      G.player.hp = 100;
+      scatterPeds(G, 2900, 900, 3);
     }
-    placeTrafficNear(G, 1400, 1400, 4);
-  } else if (name === 'mission') {
-    // The pier mission: rivals holding Lantern Pier, player aiming in.
-    p.x = 2760; p.y = 1000; p.onFoot = true; p.car = null;
-    p.aimAngle = 0;
-    G.missions.index = 3; G.missions.phase = 'active';
-    G.missions.rivalsLeft = 3;
-    G.missions.marker = { x: 3000, y: 1000, label: 'Lantern Pier' };
-    G.banner('Pier Claim', 'Clear the rivals on Lantern Pier. They shoot back.', 8);
-    const pier = G.city.pier;
-    spawnRival(G, pier.x0 + 140, pier.y0 + 30);
-    spawnRival(G, pier.x0 + 260, pier.y1 - 30);
-    spawnRival(G, pier.x1 - 80, (pier.y0 + pier.y1) / 2);
-    placeTrafficNear(G, 2600, 1000, 3);
+    // Settle the camera on the scene, then freeze the simulation so
+    // the captured frame is exactly the posed one.
+    CB.updateCamera(G);
+    G.camera.x = Math.max(0, Math.min(CB.CFG.WORLD_W - CB.CFG.VIEW_W, G.player.x - CB.CFG.VIEW_W / 2));
+    G.camera.y = Math.max(0, Math.min(CB.CFG.WORLD_H - CB.CFG.VIEW_H, G.player.y - CB.CFG.VIEW_H / 2));
+    G.frozen = true;
+    setTimeout(function () { window.__shot = 'ready'; }, 700);
   }
-  // Camera on the player, a beat of simulation so the frame is alive.
-  G.camera.x = p.x; G.camera.y = p.y;
-  for (let i = 0; i < 12; i++) G.tick(1 / 60, true);
-}
 
-function placeTrafficNear(G, cx, cy, n) {
-  const roads = G.city.roadsX.concat(G.city.roadsY);
-  for (let i = 0; i < n; i++) {
-    const axis = G.rng() < 0.5 ? 'x' : 'y';
-    const road = axis === 'x' ? G.city.roadsY[Math.floor(G.rng() * G.city.roadsY.length)] : G.city.roadsX[Math.floor(G.rng() * G.city.roadsX.length)];
-    const along = axis === 'x' ? cx + (G.rng() - 0.5) * 700 : cy + (G.rng() - 0.5) * 700;
-    const car = makeCar({
-      id: nextCarId(), kind: 'traffic',
-      x: axis === 'x' ? along : road + 14,
-      y: axis === 'x' ? road + 14 : along,
-      angle: axis === 'x' ? 0 : Math.PI / 2,
-      color: ['#c93a3a', '#3a7ac9', '#e8c93a', '#e8e8e8', '#5ac93a'][i % 5],
-      driver: 'ai', axis, road, dir: 1, lane: 14,
-      cruise: 170 + G.rng() * 60,
-    });
-    car.speed = car.cruise;
-    G.cars.push(car);
+  function scatterTraffic(G, cx, cy, n) {
+    for (var i = 0; i < n; i++) {
+      var vertical = G.rng.chance(0.5);
+      var line = vertical ? G.rng.pick(CB.CFG.ROADS_V) : G.rng.pick(CB.CFG.ROADS_H);
+      var along = G.rng.range(-260, 260);
+      var lane = (G.rng.chance(0.5) ? 1 : -1) * 22;
+      var model = G.rng.pick(['sedan', 'sedan', 'taxi', 'sport']);
+      var car = CB.makeCar(G, {
+        x: vertical ? line + lane : cx + along, y: vertical ? cy + along : line + lane,
+        angle: vertical ? (lane > 0 ? Math.PI / 2 : -Math.PI / 2) : (lane > 0 ? 0 : Math.PI),
+        model: model, isTraffic: true, color: G.rng.pick(CB.CFG.CARS[model].colors)
+      });
+      car.ai = { axis: vertical ? 'v' : 'h', dir: lane > 0 ? 1 : -1, cruise: 120 };
+      car.speed = 120;
+      G.cars.push(car);
+    }
   }
-}
 
-function placePedsNear(G, cx, cy, n) {
-  for (let i = 0; i < n; i++) {
-    G.peds.push({
-      id: 500 + i, kind: 'ped',
-      x: cx + (G.rng() - 0.5) * 500, y: cy + (G.rng() - 0.5) * 400,
-      angle: G.rng() * Math.PI * 2, speed: 50, walkPhase: G.rng() * 6,
-      state: 'walk', stateT: 0, hp: 100,
-      color: '#e8c0a0', shirt: ['#c93a3a', '#3a7ac9', '#5ac93a', '#e8c93a'][i % 4],
-    });
+  function scatterPeds(G, cx, cy, n) {
+    for (var i = 0; i < n; i++) {
+      G.peds.push({ x: cx + G.rng.range(-220, 220), y: cy + G.rng.range(-180, 180),
+        angle: G.rng.range(0, Math.PI * 2), speed: 40, state: 'walk',
+        color: G.rng.pick(['#d83a2e', '#2e6ad8', '#e8b73a', '#3f7a44']),
+        downAt: 0, fleeX: 0, fleeY: 0, seed: i });
+    }
   }
-}
+
+  CB.poseScene = poseScene;
+
+  // The cover scene runs job 1 for real: the marked Comet is parked on
+  // Marina Blvd and the banner names the lift, so the cover shows the
+  // mission system as well as the city.
+  var _poseScene = poseScene;
+  CB.poseScene = function (G, shot) {
+    if (['cover', 'drive', 'chase', 'mission'].indexOf(shot) < 0) {
+      window.__shot = 'ready';
+      return;
+    }
+    if (shot === 'cover') CB.setMission(G, 0);
+    _poseScene(G, shot);
+  };
+  CB.shotScenes = ['cover', 'drive', 'chase', 'mission'];
+})();
