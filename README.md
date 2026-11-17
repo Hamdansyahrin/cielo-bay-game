@@ -1,6 +1,10 @@
 # Cielo Bay — steal cars, run the fixer's missions, outrun the heat
 
-An original open-world crime game for the make.fun GTA 6 bounty. A
+[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![rank](https://make.fun/badge/gta6-01/Hamdansyahrin/cielo-bay-game/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![reward](https://make.fun/badge/gta6-01/Hamdansyahrin/cielo-bay-game/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+
+An original open-world crime game for the [make.fun GTA 6 bounty](https://make.fun/bounty/gta6-01). A
 sun-soaked coastal city, built from scratch in plain canvas JavaScript
 — no libraries, no network at play time, every sound synthesized live.
 
