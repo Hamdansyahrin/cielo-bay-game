@@ -211,6 +211,10 @@
         if (p.onFoot && Math.hypot(p.x - b.x, p.y - b.y) < 14) {
           damagePlayer(G, 8);
           dead = true;
+        } else if (!p.onFoot && p.car && Math.hypot(p.car.x - b.x, p.car.y - b.y) < 26) {
+          p.car.damage = Math.min(100, p.car.damage + 2);
+          G.particles.push({ x: b.x, y: b.y, vx: 0, vy: 0, life: 0.15, maxLife: 0.15, color: '#ffd27a', size: 5, kind: 'dot' });
+          dead = true;
         }
       }
       if (dead) G.bullets.splice(i, 1);

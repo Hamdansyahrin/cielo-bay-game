@@ -91,7 +91,18 @@
     });
     canvas.addEventListener('mousedown', function (e) {
       CB.Audio.resume();
-      if (e.button === 0) G.mouse.down = true;
+      var rect = canvas.getBoundingClientRect();
+      G.mouse.x = e.clientX - rect.left;
+      G.mouse.y = e.clientY - rect.top;
+      if (e.button === 0) {
+        G.mouse.down = true;
+        // A click fires at once (a press-release faster than one frame
+        // must still shoot); holding keeps firing from the loop.
+        if (G.screen === 'playing' && G.player.onFoot && (G.player.fireCooldown || 0) <= 0) {
+          CB.firePistol(G);
+          G.player.fireCooldown = 0.28;
+        }
+      }
       if (e.button === 2) G.mouse.right = true;
     });
     window.addEventListener('mouseup', function (e) {
@@ -104,6 +115,8 @@
     // The loop.
     var last = performance.now();
     function frame(now) {
+      // Reschedule first: a throw in one frame must never kill the loop.
+      requestAnimationFrame(frame);
       var dt = Math.min(0.1, Math.max(0.001, (now - last) / 1000));
       last = now;
       if (!G.frozen) {
@@ -115,7 +128,6 @@
       CB.updateCamera(G);
       CB.drawWorld(ctx, G);
       CB.drawHUD(ctx, G);
-      requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
   }

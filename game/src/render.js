@@ -224,8 +224,9 @@
 
   // The mission beacon: a pulsing ring and light column on the target.
   function drawMissionBeacon(ctx, G) {
+    if (G.screen !== 'playing') return;
     var marker = CB.missionMarker(G);
-    if (!marker || G.screen !== 'playing') return;
+    if (!marker) return;
     var pulse = (Math.sin(G.time * 4) + 1) / 2;
     ctx.save();
     ctx.strokeStyle = 'rgba(255,210,58,' + (0.5 + pulse * 0.5) + ')';

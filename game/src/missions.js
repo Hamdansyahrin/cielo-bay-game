@@ -204,6 +204,7 @@
   function missionMarker(G) {
     if (G.mission >= 5) return null;
     var S = G.missionState;
+    if (!S) return null;
     if (G.mission === 0) return S.phase === 'steal' && S.targetCar ? { x: S.targetCar.x, y: S.targetCar.y } : { x: G.city.chopShop.x, y: G.city.chopShop.y };
     if (G.mission === 1) { var cp = G.city.courierPoints[S.checkIndex]; return cp ? { x: cp.x, y: cp.y } : null; }
     if (G.mission === 2) return null;
