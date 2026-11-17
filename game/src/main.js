@@ -289,6 +289,9 @@ window.__cielo = {
     police: G.cars.filter((c) => c.kind === 'police').length,
     peds: G.peds.length,
     toasts: G.toasts.map((t) => t.text),
+    carX: G.player.car ? Math.round(G.player.car.x) : null,
+    carY: G.player.car ? Math.round(G.player.car.y) : null,
+    carSpeed: G.player.car ? Math.round(G.player.car.speed) : null,
   }),
   enterNearestCar: () => {
     const car = nearestEnterableCar(G, G.player);

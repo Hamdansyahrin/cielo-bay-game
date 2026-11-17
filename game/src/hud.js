@@ -107,15 +107,15 @@ function drawMinimap(ctx, G, W, H) {
 }
 
 function drawObjective(ctx, G, W) {
-  const text = missionObjectiveText(G);
   const m = currentMission(G);
+  const display = (m ? `JOB ${G.missions.index + 1}: ${m.name} — ` : '') + missionObjectiveText(G);
   ctx.textAlign = 'center';
   ctx.font = 'bold 16px sans-serif';
-  const w = Math.max(320, ctx.measureText(text).width + 48);
+  const w = Math.min(W - 24, Math.max(320, ctx.measureText(display).width + 48));
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
   ctx.fillRect(W / 2 - w / 2, 10, w, 34);
   ctx.fillStyle = '#ffd94a';
-  ctx.fillText((m ? `JOB ${G.missions.index + 1}: ${m.name} — ` : '') + text, W / 2, 32);
+  ctx.fillText(display, W / 2, 32);
 }
 
 function drawBanner(ctx, G, W, H) {
@@ -126,13 +126,13 @@ function drawBanner(ctx, G, W, H) {
   ctx.globalAlpha = alpha;
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  ctx.fillRect(W / 2 - 300, H / 2 - 110, 600, 84);
+  ctx.fillRect(W / 2 - 300, H / 2 - 190, 600, 84);
   ctx.fillStyle = '#ffd94a';
   ctx.font = 'bold 30px sans-serif';
-  ctx.fillText(b.title, W / 2, H / 2 - 76);
+  ctx.fillText(b.title, W / 2, H / 2 - 156);
   ctx.fillStyle = '#fff';
   ctx.font = '16px sans-serif';
-  wrapText(ctx, b.text, W / 2, H / 2 - 48, 560, 20);
+  wrapText(ctx, b.text, W / 2, H / 2 - 128, 560, 20);
   ctx.restore();
 }
 
@@ -156,14 +156,15 @@ function drawToasts(ctx, G, W, H) {
   let y = H - 190;
   for (const t of G.toasts) {
     const alpha = Math.min(1, t.t / 0.5, (t.life - t.t) / 0.5);
+    const display = (t.fromMara ? '📱 Mara: ' : '') + t.text;
     ctx.save();
     ctx.globalAlpha = Math.max(0, alpha);
     ctx.fillStyle = 'rgba(20,16,30,0.85)';
-    const w = Math.min(420, ctx.measureText(t.text).width + 24);
+    ctx.font = '14px sans-serif';
+    const w = Math.min(560, ctx.measureText(display).width + 24);
     ctx.fillRect(14, y - 18, w, 30);
     ctx.fillStyle = t.fromMara ? '#ffd94a' : '#fff';
-    ctx.font = '14px sans-serif';
-    ctx.fillText((t.fromMara ? '📱 Mara: ' : '') + t.text, 22, y + 3);
+    ctx.fillText(display, 22, y + 3);
     ctx.restore();
     y -= 34;
   }
@@ -173,15 +174,16 @@ function drawSpeedo(ctx, G, W, H) {
   if (!G.player.car) return;
   const car = G.player.car;
   const kmh = Math.round(Math.abs(car.speed) * 0.55);
-  ctx.textAlign = 'right';
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
-  ctx.fillRect(W - 240, H - 190, 220, 30);
+  ctx.fillRect(12, H - 64, 220, 30);
+  ctx.fillStyle = car.hp < 45 ? '#ff3a3a' : '#7dff8a';
+  ctx.font = '13px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(`CAR ${Math.max(0, Math.round(car.hp))}%`, 20, H - 44);
   ctx.fillStyle = '#fff';
   ctx.font = 'bold 22px sans-serif';
-  ctx.fillText(`${kmh} km/h`, W - 26, H - 168);
-  ctx.font = '13px sans-serif';
-  ctx.fillStyle = car.hp < 45 ? '#ff3a3a' : '#7dff8a';
-  ctx.fillText(`CAR ${Math.max(0, Math.round(car.hp))}%`, W - 120, H - 168);
+  ctx.textAlign = 'right';
+  ctx.fillText(`${kmh} km/h`, 222, H - 42);
 }
 
 function drawHint(ctx, G, W, H) {
