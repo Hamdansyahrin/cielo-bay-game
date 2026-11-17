@@ -13,7 +13,7 @@
     ROADS_Y: [200, 600, 1000, 1400, 1800, 2150],
     WATER_Y: 2240,          // beach sand ends, water begins (south shore)
     PIER: { x: 2820, y: 880, w: 560, h: 240 },  // wooden deck, east marina
-    PLAYER_SPEED: 148, PLAYER_RUN: 248, PLAYER_R: 13,
+    PLAYER_SPEED: 205, PLAYER_RUN: 315, PLAYER_R: 13,
     BULLET_SPEED: 950, FIRE_COOLDOWN: 0.26, MELEE_RANGE: 46,
     SEEN_RADIUS: 240,        // a witness must be this close AND have line of sight
     POLICE_GIVE_UP: 8,       // seconds unseen before a cruiser quits

@@ -98,7 +98,7 @@
   var last = performance.now();
   function frame(now) {
     requestAnimationFrame(frame); // reschedule FIRST: one throw can't freeze the game
-    var dt = Math.min(0.05, (now - last) / 1000);
+    var dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     if (G.screen === 'playing') {
       G.time += dt;

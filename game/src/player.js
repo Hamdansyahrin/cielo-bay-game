@@ -120,7 +120,8 @@
       var nx = b.x + b.vx * dt, ny = b.y + b.vy * dt;
       b.life -= dt;
       var dead = b.life <= 0;
-      if (CB.buildingAt(G.city, nx, ny, 0)) dead = true;
+      // Bullets fly flat and fast over the low street furniture; line
+      // of sight (not bullet collision) is what buildings block.
       if (!dead && b.foe) {
         // Rival fire can hit the player or the player's car.
         if (G.player.car) {
