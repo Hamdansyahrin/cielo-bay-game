@@ -1,230 +1,199 @@
-// Cielo Bay — main.js: boots the game, owns the loop and the screens,
-// and exposes the debug handle the playtest driver uses. Input is
-// keyboard + mouse; the loop clamps its delta so a slow headless
-// browser still moves the player at the right speed.
+// Cielo Bay — main.js: boot, input, the game loop and the states.
+// The loop reschedules itself FIRST, so a single bad frame can never
+// freeze the bay; mission code is always null-guarded.
 (function () {
   'use strict';
   var CB = window.CB = window.CB || {};
+  var CFG = CB.CFG;
 
-  function parseQuery() {
-    var q = {};
-    try {
-      var params = new URLSearchParams(window.location.search);
-      params.forEach(function (v, k) { q[k] = v; });
-    } catch (e) { /* no query */ }
-    return q;
-  }
+  var params = new URLSearchParams(window.location.search);
+  var seed = parseInt(params.get('seed') || '1337', 10) || 1337;
+  CB.reseed(seed);
 
-  function newGame(seed) {
-    var cfg = CB.CFG;
-    var G = {
-      time: 0, seed: seed,
-      rng: new CB.SeededRandom(seed),
-      city: CB.buildCity(seed),
-      screen: 'title',
-      player: { x: cfg.SPAWN.x, y: cfg.SPAWN.y, angle: 0, faceAngle: -Math.PI / 2,
-        aimAngle: -Math.PI / 2, hp: cfg.PLAYER_HP, maxHp: cfg.PLAYER_HP,
-        onFoot: true, car: null, moving: false, speed: 0,
-        fireCooldown: 0, meleeCooldown: 0, hurtTimer: 0 },
-      cars: [], peds: [], police: [], rivals: [], roadblocks: [],
-      bullets: [], particles: [],
-      wanted: 0, wantedPoints: 0, lastCrimeAt: -9999, lastSeenAt: -9999, heatTimer: 0,
-      lastKnown: { x: cfg.SPAWN.x, y: cfg.SPAWN.y },
-      cash: 0, respect: 0, mission: 0, missionState: null, unlocked: 0, freeRoam: false,
-      camera: { x: 0, y: 0 }, shake: 0, muzzle: 0,
-      keys: {}, mouse: { x: 640, y: 360, down: false, right: false },
-      toasts: [], frozen: false, shotMode: null,
-      policeSpawnT: 0, saveT: 0, deaths: 0
-    };
-    // Parked cars from the city plan, plus the armored van at the port.
-    G.city.parked.forEach(function (spec) {
-      G.cars.push(CB.makeCar(G, { x: spec.x, y: spec.y, angle: spec.angle, model: spec.model, isParked: true, color: spec.color }));
-    });
-    G.cars.push(CB.makeCar(G, { x: G.city.vanSpawn.x, y: G.city.vanSpawn.y, angle: -Math.PI / 2, model: 'armored', isParked: true, missionVan: true, color: '#3a3f46' }));
-    CB.spawnTraffic(G);
-    CB.spawnPeds(G);
-    return G;
-  }
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
 
-  function startPlaying(G, fromSave) {
-    if (fromSave) {
-      var data = CB.Save.read();
-      if (data) CB.Save.apply(G, data);
+  var G = {
+    time: 0, screen: 'title',
+    city: null, player: null,
+    cars: [], peds: [], police: [], roadblocks: [], bullets: [], particles: [], toasts: [],
+    rivals: [], markedCar: null, van: null,
+    cash: 0, respect: 0, wanted: 0,
+    missionIndex: 0, missionState: null, pendingNext: null,
+    lastCrimeAt: -99, lastCrimeX: 0, lastCrimeY: 0,
+    gunfireAt: -99, gunfireX: 0, gunfireY: 0,
+    lastSeenX: 0, lastSeenY: 0, lastSeenAt: -99, hiddenT: 0, heatHoldT: 0, decayT: 0,
+    bustT: 0, spawnT: 0, lastBlockAt: -99, shake: 0, muzzleT: 0,
+    camera: { x: 0, y: 0 },
+    input: { up: false, down: false, left: false, right: false, run: false, handbrake: false, mouseDown: false, melee: false, mouseX: 640, mouseY: 360 }
+  };
+  CB.G = G;
+
+  G.city = CB.buildCity(CB.rng);
+  G.player = CB.makePlayer(600, 480);
+  CB.spawnTraffic(G);
+  CB.spawnPeds(G);
+  G.lastSeenX = G.player.x; G.lastSeenY = G.player.y;
+
+  // ---------------- input ----------------
+  var KEYMAP = { KeyW: 'up', ArrowUp: 'up', KeyS: 'down', ArrowDown: 'down', KeyA: 'left', ArrowLeft: 'left', KeyD: 'right', ArrowRight: 'right', ShiftLeft: 'run', ShiftRight: 'run', Space: 'handbrake' };
+  window.addEventListener('keydown', function (e) {
+    CB.audioInit();
+    var k = KEYMAP[e.code];
+    if (k) { G.input[k] = true; if (e.code === 'Space' || e.code.indexOf('Arrow') === 0) e.preventDefault(); }
+    if (e.repeat) return;
+    if (e.code === 'KeyE' || e.code === 'KeyF' && G.player.car) { /* handled below */ }
+    if (e.code === 'KeyE' && G.screen === 'playing') CB.tryEnterExit(G);
+    if (e.code === 'KeyF') G.input.melee = true;
+    if (e.code === 'KeyM') CB.toast(G, CB.audioToggleMute() ? 'Sound off' : 'Sound on', 'info');
+    if (e.code === 'KeyP') {
+      if (G.screen === 'playing') G.screen = 'paused';
+      else if (G.screen === 'paused') G.screen = 'playing';
+    }
+    if (e.code === 'Enter') {
+      if (G.screen === 'title') startRun(G, false);
+      else if (G.screen === 'busted' || G.screen === 'wasted') CB.respawn(G);
+      else if (G.screen === 'paused') G.screen = 'playing';
+    }
+    if (e.code === 'KeyC' && G.screen === 'title' && CB.hasSave()) startRun(G, true);
+  });
+  window.addEventListener('keyup', function (e) {
+    var k = KEYMAP[e.code];
+    if (k) G.input[k] = false;
+    if (e.code === 'KeyF') G.input.melee = false;
+  });
+  canvas.addEventListener('mousemove', function (e) {
+    var r = canvas.getBoundingClientRect();
+    G.input.mouseX = (e.clientX - r.left) * (CFG.VIEW_W / r.width);
+    G.input.mouseY = (e.clientY - r.top) * (CFG.VIEW_H / r.height);
+  });
+  canvas.addEventListener('mousedown', function (e) {
+    CB.audioInit();
+    if (e.button === 0) {
+      G.input.mouseDown = true;
+      CB.playerShoot(G); // fire at once: a tap shorter than a frame still shoots
+    }
+    if (e.button === 2) G.input.melee = true;
+  });
+  window.addEventListener('mouseup', function (e) {
+    if (e.button === 0) G.input.mouseDown = false;
+    if (e.button === 2) G.input.melee = false;
+  });
+  canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+  function startRun(G, useSave) {
+    if (useSave) {
+      var d = CB.loadGame();
+      if (d) CB.applySave(G, d);
+    } else {
+      G.cash = 0; G.respect = 0; G.missionIndex = 0;
+      G.player.x = 600; G.player.y = 480; G.player.hp = 100; G.player.car = null;
     }
     G.screen = 'playing';
-    G.player.hp = G.player.maxHp;
-    CB.Audio.resume();
-    CB.startMission(G, G.mission);
-    CB.toast(G, 'Welcome to Cielo Bay — Mara is on the phone', 4);
+    if (G.missionIndex < 5) CB.startMission(G, G.missionIndex);
+    else { G.missionState = null; CB.toast(G, 'Welcome back to Cielo Bay. Free roam.', 'phone'); }
   }
 
-  function boot() {
-    var canvas = document.getElementById('game');
-    var ctx = canvas.getContext('2d');
-    var query = parseQuery();
-    var seed = query.seed ? CB.hashSeed(String(query.seed)) : ((Date.now() % 2147483647) || 1);
-    var G = newGame(seed);
-    window.__cielo = makeDebug(G);
-    window.__shot = null;
-    // Input: keys.
-    window.addEventListener('keydown', function (e) {
-      if (e.code === 'Space') e.preventDefault();
-      G.keys[e.code] = true;
-      CB.Audio.resume();
-      if (e.code === 'Enter') {
-        if (G.screen === 'title') startPlaying(G, false);
-        else if (G.screen === 'busted' || G.screen === 'wasted') { G.screen = 'playing'; G.player.hp = G.player.maxHp; }
-        else if (G.screen === 'paused') G.screen = 'playing';
-      }
-      if (e.code === 'KeyC' && G.screen === 'title' && CB.Save.has()) startPlaying(G, true);
-      if (e.code === 'KeyP' && (G.screen === 'playing' || G.screen === 'paused')) {
-        G.screen = G.screen === 'playing' ? 'paused' : 'playing';
-      }
-      if (e.code === 'KeyM') CB.Audio.setMuted(!CB.Audio.muted);
-      if (e.code === 'KeyE' && G.screen === 'playing' && !G.frozen) CB.enterExitCar(G);
-    });
-    window.addEventListener('keyup', function (e) { G.keys[e.code] = false; });
-    // Input: mouse.
-    canvas.addEventListener('mousemove', function (e) {
-      var rect = canvas.getBoundingClientRect();
-      G.mouse.x = e.clientX - rect.left;
-      G.mouse.y = e.clientY - rect.top;
-    });
-    canvas.addEventListener('mousedown', function (e) {
-      CB.Audio.resume();
-      var rect = canvas.getBoundingClientRect();
-      G.mouse.x = e.clientX - rect.left;
-      G.mouse.y = e.clientY - rect.top;
-      if (e.button === 0) {
-        G.mouse.down = true;
-        // A click fires at once (a press-release faster than one frame
-        // must still shoot); holding keeps firing from the loop.
-        if (G.screen === 'playing' && G.player.onFoot && (G.player.fireCooldown || 0) <= 0) {
-          CB.firePistol(G);
-          G.player.fireCooldown = 0.28;
-        }
-      }
-      if (e.button === 2) G.mouse.right = true;
-    });
-    window.addEventListener('mouseup', function (e) {
-      if (e.button === 0) G.mouse.down = false;
-      if (e.button === 2) G.mouse.right = false;
-    });
-    canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
-    // A posed screenshot scene starts straight into the world.
-    if (query.shot) CB.poseScene(G, query.shot);
-    // The loop.
-    var last = performance.now();
-    function frame(now) {
-      // Reschedule first: a throw in one frame must never kill the loop.
-      requestAnimationFrame(frame);
-      var dt = Math.min(0.1, Math.max(0.001, (now - last) / 1000));
-      last = now;
-      if (!G.frozen) {
-        G.time += dt;
-        update(G, dt);
-      } else {
-        G.time += dt * 0.5; // keep the water and pulses alive in a still
-      }
-      CB.updateCamera(G);
-      CB.drawWorld(ctx, G);
-      CB.drawHUD(ctx, G);
+  // ---------------- loop ----------------
+  var last = performance.now();
+  function frame(now) {
+    requestAnimationFrame(frame); // reschedule FIRST: one throw can't freeze the game
+    var dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    if (G.screen === 'playing') {
+      G.time += dt;
+      if (G.player.car) CB.updatePlayerCar(G, dt); else CB.updatePlayerFoot(G, dt);
+      CB.updateTraffic(G, dt);
+      CB.updatePeds(G, dt);
+      CB.updateBullets(G, dt);
+      CB.updatePolice(G, dt);
+      CB.updateMissions(G, dt);
+      CB.updateParticles(G, dt);
+      CB.updateToasts(G, dt);
+      if (G.player.hp < 100 && !G.player.car && G.wanted === 0) G.player.hp = Math.min(100, G.player.hp + dt * 1.6);
+    } else if (G.screen === 'title') {
+      G.time += dt;
+      CB.updateTraffic(G, dt);
+      CB.updatePeds(G, dt);
+      CB.updateParticles(G, dt);
     }
-    requestAnimationFrame(frame);
-  }
-  CB._boot = boot;
-  CB._newGame = newGame;
-
-  function update(G, dt) {
-    if (G.screen !== 'playing') return;
-    var p = G.player;
-    if (p.onFoot) CB.updateOnFoot(G, dt);
-    else CB.updatePlayerCar(G, dt);
-    CB.updateTraffic(G, dt);
-    CB.updatePeds(G, dt);
-    CB.updateBullets(G, dt);
-    CB.updateWanted(G, dt);
-    CB.updatePolice(G, dt);
-    CB.updateMissions(G, dt);
-    // Particles drift and fade.
-    for (var i = G.particles.length - 1; i >= 0; i--) {
-      var pt = G.particles[i];
-      pt.x += (pt.vx || 0) * dt;
-      pt.y += (pt.vy || 0) * dt;
-      pt.life -= dt;
-      if (pt.life <= 0) G.particles.splice(i, 1);
-    }
-    G.muzzle = Math.max(0, G.muzzle - dt);
-    // Phone toasts tick down and leave.
-    for (var j = G.toasts.length - 1; j >= 0; j--) {
-      G.toasts[j].t -= dt;
-      if (G.toasts[j].t <= 0) G.toasts.splice(j, 1);
-    }
-    // Autosave every 15 seconds of play.
-    G.saveT += dt;
-    if (G.saveT > 15) {
-      G.saveT = 0;
-      CB.Save.write(G);
-    }
+    // Camera follows with a little lookahead; shake decays.
+    var tx = (G.player.car ? G.player.car.x : G.player.x) - CFG.VIEW_W / 2;
+    var ty = (G.player.car ? G.player.car.y : G.player.y) - CFG.VIEW_H / 2;
+    G.camera.x += (Math.max(0, Math.min(CFG.WORLD_W - CFG.VIEW_W, tx)) - G.camera.x) * 0.12;
+    G.camera.y += (Math.max(0, Math.min(CFG.WORLD_H - CFG.VIEW_H, ty)) - G.camera.y) * 0.12;
+    if (G.shake > 0) G.shake = Math.max(0, G.shake - dt * 22);
+    ctx.save();
+    if (G.shake > 0) ctx.translate((Math.random() - 0.5) * G.shake, (Math.random() - 0.5) * G.shake);
+    CB.drawWorld(G, ctx);
+    var i;
+    for (i = 0; i < G.cars.length; i++) CB.drawCar(G, ctx, G.cars[i]);
+    for (i = 0; i < G.police.length; i++) if (G.roadblocks.indexOf(G.police[i]) >= 0) CB.drawCar(G, ctx, G.police[i]);
+    for (i = 0; i < G.police.length; i++) if (G.roadblocks.indexOf(G.police[i]) < 0) CB.drawCar(G, ctx, G.police[i]);
+    for (i = 0; i < G.peds.length; i++) CB.drawPed(G, ctx, G.peds[i]);
+    CB.drawPlayer(G, ctx);
+    CB.drawEffects(G, ctx);
+    ctx.restore();
+    if (G.screen === 'playing' || G.screen === 'paused') CB.drawHUD(G, ctx);
+    if (G.screen !== 'playing') CB.drawScreens(G, ctx);
   }
 
-  // The debug handle the playtest driver uses: world state, the mission
-  // target, teleports for reaching test points, and mission jumps.
-  function makeDebug(G) {
-    return {
-      G: G,
-      state: function () {
-        var p = G.player;
-        return {
-          screen: G.screen,
-          x: Math.round(p.x), y: Math.round(p.y),
-          onFoot: p.onFoot,
-          carX: p.car ? Math.round(p.car.x) : 0,
-          carY: p.car ? Math.round(p.car.y) : 0,
-          carSpeed: p.car ? Math.round(p.car.speed) : 0,
-          mission: G.mission,
-          cash: Math.round(G.cash),
-          police: G.police.length,
-          wanted: G.wanted,
-          health: Math.round(p.hp)
-        };
-      },
-      missionTarget: function () {
-        var marker = CB.missionMarker(G);
-        if (G.mission === 0 && G.missionState && G.missionState.targetCar) {
-          return { x: G.missionState.targetCar.x, y: G.missionState.targetCar.y };
-        }
-        if (marker) return { x: marker.x, y: marker.y };
-        return { x: G.player.x, y: G.player.y };
-      },
-      chopShop: function () { return { x: G.city.chopShop.x, y: G.city.chopShop.y }; },
-      teleport: function (x, y) {
-        if (G.player.car) { G.player.car.x = x; G.player.car.y = y; G.player.car.speed = 0; }
-        G.player.x = x; G.player.y = y;
-      },
-      teleportCarTo: function (x, y) {
-        if (G.player.car) { G.player.car.x = x; G.player.car.y = y; G.player.car.speed = 0; }
-        G.player.x = x; G.player.y = y;
-      },
-      missionInfo: function () {
-        return { mission: G.mission, phase: G.missionState ? G.missionState.phase : null,
-          objective: CB.objectiveText(G) };
-      },
-      setMission: function (i) { CB.setMission(G, i); },
-      rivals: function () {
-        return G.rivals.map(function (r) { return { x: Math.round(r.x), y: Math.round(r.y), hp: r.hp }; });
-      },
-      checkpoints: function () {
-        return G.city.courierPoints.map(function (c) { return { x: c.x, y: c.y, name: c.name }; });
-      },
-      vanPos: function () { return { x: G.city.vanSpawn.x, y: G.city.vanSpawn.y }; },
-      policeCount: function () { return G.police.length; }
-    };
-  }
+  // ---------------- debug / playtest API ----------------
+  window.__cielo = {
+    G: G,
+    state: function () {
+      var c = G.player.car;
+      return {
+        screen: G.screen, x: Math.round(G.player.x), y: Math.round(G.player.y),
+        onFoot: !c, mission: G.missionIndex, cash: G.cash, respect: G.respect,
+        wanted: G.wanted, police: G.police.length, hp: Math.round(G.player.hp),
+        carX: c ? Math.round(c.x) : null, carY: c ? Math.round(c.y) : null,
+        carSpeed: c ? Math.round(Math.abs(c.speed)) : 0, time: Math.round(G.time * 10) / 10
+      };
+    },
+    missionTarget: function () {
+      var t = CB.missionTargetPos(G);
+      return t ? { x: Math.round(t.x), y: Math.round(t.y) } : null;
+    },
+    chopShop: function () { return { x: G.city.chopShop.x, y: G.city.chopShop.y }; },
+    teleport: function (x, y) {
+      G.player.x = x; G.player.y = y;
+      if (G.player.car) { G.player.car.x = x; G.player.car.y = y; }
+      G.camera.x = Math.max(0, Math.min(CFG.WORLD_W - CFG.VIEW_W, x - CFG.VIEW_W / 2));
+      G.camera.y = Math.max(0, Math.min(CFG.WORLD_H - CFG.VIEW_H, y - CFG.VIEW_H / 2));
+    },
+    teleportCarTo: function (x, y) {
+      if (G.player.car) { G.player.car.x = x; G.player.car.y = y; G.player.x = x; G.player.y = y; }
+    },
+    missionInfo: function () {
+      var ms = G.missionState;
+      if (!ms) return { idx: G.missionIndex, phase: 'none' };
+      return { idx: ms.idx, phase: ms.phase, cpIndex: ms.cpIndex || 0, timer: Math.round(ms.timer || 0), surviveT: Math.round(ms.surviveT || 0) };
+    },
+    setMission: function (idx) {
+      G.missionState = null; G.pendingNext = null;
+      if (G.screen !== 'playing') G.screen = 'playing';
+      CB.startMission(G, idx);
+    },
+    rivals: function () { return G.rivals.map(function (r) { return { x: Math.round(r.x), y: Math.round(r.y), hp: r.hp }; }); },
+    checkpoints: function () {
+      var ms = G.missionState;
+      return ms && ms.checkpoints ? ms.checkpoints.map(function (c) { return { x: c.x, y: c.y, name: c.name }; }) : [];
+    },
+    vanPos: function () { return G.van ? { x: Math.round(G.van.x), y: Math.round(G.van.y) } : null; },
+    policeCount: function () { return G.police.length; }
+  };
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot);
-  } else {
-    boot();
+  // ---------------- boot ----------------
+  var shotName = params.get('shot');
+  if (shotName) {
+    CB.poseShot(G, shotName);
+    // Let the posed scene breathe for a few frames, then flag ready.
+    var warm = 0;
+    var warmId = setInterval(function () {
+      warm++;
+      if (warm >= 6) { clearInterval(warmId); window.__shot = 'ready'; }
+    }, 90);
   }
+  requestAnimationFrame(frame);
 })();

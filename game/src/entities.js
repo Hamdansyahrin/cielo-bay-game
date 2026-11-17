@@ -1,157 +1,137 @@
-// Cielo Bay — entities.js: the city's other inhabitants. Traffic drives
-// the road grid with headlights and simple give-way behaviour; parked
-// cars sit on the shoulders; pedestrians walk the sidewalks and run
-// from gunfire and theft. All of them recycle near the player so the
-// streets always feel alive without simulating the whole map.
+// Cielo Bay — entities.js: traffic cars and pedestrians — spawning,
+// wandering, fleeing, and being very sorry they parked there.
 (function () {
   'use strict';
   var CB = window.CB = window.CB || {};
+  var CFG = CB.CFG;
 
-  var carId = 0;
-  function makeCar(G, spec) {
-    var def = CB.CFG.CARS[spec.model] || CB.CFG.CARS.sedan;
+  CB.makeCar = function (x, y, angle, opts) {
+    opts = opts || {};
     return {
-      id: ++carId, x: spec.x, y: spec.y, angle: spec.angle || 0,
-      speed: 0, model: spec.model, color: spec.color || def.colors[0],
-      w: def.w, h: def.h, damage: 0, wrecked: false,
-      isTraffic: !!spec.isTraffic, isParked: !!spec.isParked,
-      isPolice: !!spec.isPolice, isPlayer: false,
-      missionTarget: !!spec.missionTarget, missionVan: !!spec.missionVan,
-      ai: spec.isTraffic ? { dir: 1, axis: 'v', turnAt: 0, wait: 0 } : null,
-      smokeT: 0
+      x: x, y: y, angle: angle || 0, speed: 0, steer: 0,
+      w: opts.w || 46, h: opts.h || 22,
+      color: opts.color || CB.rng.pick(CB.PALETTE.carBody),
+      name: opts.name || CB.rng.pick(CB.CAR_NAMES),
+      hp: opts.hp || 100, maxHp: opts.hp || 100,
+      kind: opts.kind || 'traffic', parked: !!opts.parked,
+      driver: opts.driver !== false, armored: !!opts.armored,
+      marked: !!opts.marked, smokeT: 0, honkT: 0,
+      lane: 0, targetX: x, targetY: y, turnAt: null, waitT: 0
     };
-  }
+  };
 
-  // Spawn traffic on roads near the player, spread over the grid.
-  function spawnTraffic(G) {
-    var rng = G.rng;
-    for (var i = 0; i < CB.CFG.TRAFFIC_COUNT; i++) {
-      var vertical = rng.chance(0.5);
-      var line = vertical ? rng.pick(CB.CFG.ROADS_V) : rng.pick(CB.CFG.ROADS_H);
-      var along = rng.range(120, vertical ? CB.CFG.WORLD_H - 120 : CB.CFG.WORLD_W - 120);
-      var lane = (rng.chance(0.5) ? 1 : -1) * 22;
-      var model = 'sedan';
-      var roll = rng.next();
-      if (roll > 0.92 && G.unlocked >= 2) model = 'super';
-      else if (roll > 0.78 && G.unlocked >= 1) model = 'sport';
-      else if (roll > 0.68) model = 'taxi';
-      else if (roll > 0.58) model = 'van';
-      var car = makeCar(G, {
-        x: vertical ? line + lane : along, y: vertical ? along : line + lane,
-        angle: vertical ? (lane > 0 ? Math.PI / 2 : -Math.PI / 2) : (lane > 0 ? 0 : Math.PI),
-        model: model, isTraffic: true,
-        color: rng.pick(CB.CFG.CARS[model].colors)
-      });
-      car.ai.axis = vertical ? 'v' : 'h';
-      car.ai.dir = lane > 0 ? 1 : -1;
-      car.speed = rng.range(90, 150);
-      G.cars.push(car);
+  // Parked cars hug block edges; traffic cars start on road lanes.
+  CB.spawnTraffic = function (G) {
+    var rng = CB.rng, i, car;
+    for (i = 0; i < 26; i++) {
+      var rx = rng.pick(CFG.ROADS_X), ry = rng.range(80, CFG.WORLD_H - 120);
+      car = CB.makeCar(rx + (rng.chance(0.5) ? 22 : -22), ry, rng.chance(0.5) ? -Math.PI / 2 : Math.PI / 2, {});
+      car.speed = rng.range(60, 110); G.cars.push(car);
     }
-  }
-
-  // Traffic follows its road; at an intersection it sometimes turns.
-  // A car ahead makes it brake, so traffic queues instead of stacking.
-  function updateTraffic(G, dt) {
-    var cfg = CB.CFG;
-    G.cars.forEach(function (car) {
-      if (!car.isTraffic || car.wrecked) return;
-      var ai = car.ai;
-      // Car ahead on the same lane?
-      var ahead = 1e9;
-      G.cars.forEach(function (other) {
-        if (other === car || other.wrecked) return;
-        var dx = other.x - car.x, dy = other.y - car.y;
-        var along = Math.cos(car.angle) * dx + Math.sin(car.angle) * dy;
-        var side = Math.abs(-Math.sin(car.angle) * dx + Math.cos(car.angle) * dy);
-        if (along > 0 && along < ahead && side < 26) ahead = along;
-      });
-      var target = car.speed;
-      if (ahead < 70) target = Math.max(0, (ahead - 40) * 1.5);
-      else target = ai.cruise || 130;
-      car.speed += Math.max(-400 * dt, Math.min(160 * dt, target - car.speed));
-      var nx = car.x + Math.cos(car.angle) * car.speed * dt;
-      var ny = car.y + Math.sin(car.angle) * car.speed * dt;
-      // Turn at intersections: only when centred on a crossing road.
-      var nearCross = null;
-      if (ai.axis === 'v') {
-        cfg.ROADS_H.forEach(function (ry) { if (Math.abs(ny - ry) < 26) nearCross = ry; });
-      } else {
-        cfg.ROADS_V.forEach(function (rx) { if (Math.abs(nx - rx) < 26) nearCross = rx; });
-      }
-      if (nearCross !== null && G.rng.chance(0.35) && Math.abs(car.speed) > 20) {
-        if (ai.axis === 'v') { car.y = nearCross; car.angle = G.rng.chance(0.5) ? 0 : Math.PI; ai.axis = 'h'; }
-        else { car.x = nearCross; car.angle = G.rng.chance(0.5) ? Math.PI / 2 : -Math.PI / 2; ai.axis = 'v'; }
-        car.speed = Math.max(60, car.speed * 0.8);
-      } else {
-        car.x = nx; car.y = ny;
-      }
-      // Recycle far-away traffic back onto a road near the player.
-      if (Math.hypot(car.x - G.player.x, car.y - G.player.y) > 1400) {
-        var p = G.rng.roadPoint(cfg);
-        car.x = p.x; car.y = p.y;
-      }
-    });
-  }
-
-  CB.makeCar = makeCar;
-  CB.spawnTraffic = spawnTraffic;
-  CB.updateTraffic = updateTraffic;
-
-  var SHIRTS = ['#d83a2e', '#2e6ad8', '#e8b73a', '#3f7a44', '#8a5ad8', '#e8e8e8', '#d86a2e'];
-
-  function spawnPeds(G) {
-    var rng = G.rng, cfg = CB.CFG;
-    for (var i = 0; i < cfg.PED_COUNT; i++) {
-      var vertical = rng.chance(0.5);
-      var line = vertical ? rng.pick(cfg.ROADS_V) : rng.pick(cfg.ROADS_H);
-      var along = rng.range(120, vertical ? cfg.WORLD_H - 120 : cfg.WORLD_W - 120);
-      var side = (rng.chance(0.5) ? 1 : -1) * (cfg.ROAD_W / 2 + 14);
-      G.peds.push({
-        x: vertical ? line + side : along, y: vertical ? along : line + side,
-        angle: rng.range(0, Math.PI * 2), speed: rng.range(28, 52),
-        state: 'walk', color: rng.pick(SHIRTS), downAt: 0, fleeX: 0, fleeY: 0, seed: rng.int(0, 999)
-      });
+    for (i = 0; i < 14; i++) {
+      var ry2 = rng.pick(CFG.ROADS_Y), rx2 = rng.range(80, CFG.WORLD_W - 80);
+      car = CB.makeCar(rx2, ry2 + (rng.chance(0.5) ? 22 : -22), rng.chance(0.5) ? 0 : Math.PI, {});
+      car.speed = rng.range(60, 110); G.cars.push(car);
     }
-  }
+    for (i = 0; i < 22; i++) {
+      var b = rng.pick(G.city.buildings);
+      var px = b.x + rng.range(6, Math.max(8, b.w - 52)), py = b.y + b.h + 16;
+      if (CB.onRoad(px, py) || CB.buildingAt(G.city, px, py, 20)) continue;
+      G.cars.push(CB.makeCar(px, py, rng.chance(0.5) ? 0 : Math.PI, { parked: true, driver: false }));
+    }
+  };
 
-  // Pedestrians stroll the sidewalks; a nearby crime sends them running
-  // away from it, and a hit car leaves them down for a while.
-  function updatePeds(G, dt) {
-    var cfg = CB.CFG;
-    G.peds.forEach(function (ped) {
-      if (ped.state === 'down') {
-        if (G.time - ped.downAt > 6) { ped.state = 'walk'; }
-        return;
-      }
-      if (ped.state === 'flee') {
-        var dx = ped.x - G.player.x, dy = ped.y - G.player.y;
-        var d = Math.hypot(dx, dy) || 1;
-        ped.angle = Math.atan2(dy, dx);
-        var sp = 240;
-        var nx = ped.x + Math.cos(ped.angle) * sp * dt;
-        var ny = ped.y + Math.sin(ped.angle) * sp * dt;
-        if (!G.city.blocked(nx, ped.y, 10)) ped.x = nx;
-        if (!G.city.blocked(ped.x, ny, 10)) ped.y = ny;
-        if (d > 420) ped.state = 'walk';
-        return;
-      }
-      // Walk: keep a heading, drift it slowly, stay out of buildings.
-      if (G.rng.chance(0.01)) ped.angle += G.rng.range(-0.9, 0.9);
-      var nx2 = ped.x + Math.cos(ped.angle) * ped.speed * dt;
-      var ny2 = ped.y + Math.sin(ped.angle) * ped.speed * dt;
-      if (G.city.blocked(nx2, ped.y, 10)) { ped.angle = Math.PI - ped.angle; }
-      else ped.x = nx2;
-      if (G.city.blocked(ped.x, ny2, 10)) { ped.angle = -ped.angle; }
-      else ped.y = ny2;
-      // Wander back toward the roads so peds stay on the sidewalks.
-      if (!G.city.isRoad(ped.x, ped.y) && Math.hypot(ped.x - G.player.x, ped.y - G.player.y) < 500) {
-        var near = null, best = 1e9;
-        cfg.ROADS_V.forEach(function (rx) { var dd = Math.abs(ped.x - rx); if (dd < best) { best = dd; near = rx; } });
-        if (best > cfg.ROAD_W / 2 + 40) ped.angle = Math.atan2(0, near - ped.x);
-      }
-    });
-  }
+  CB.makePed = function (x, y, opts) {
+    opts = opts || {};
+    return {
+      x: x, y: y, angle: CB.rng.range(0, Math.PI * 2), speed: 0,
+      color: opts.color || CB.rng.pick(CB.PALETTE.ped),
+      hp: opts.hp || 30, maxHp: opts.hp || 30, rival: !!opts.rival,
+      state: 'walk', fleeT: 0, downT: 0, hitFlash: 0, walkT: CB.rng.range(1, 4),
+      tx: x, ty: y, fireT: CB.rng.range(0.5, 1.5), name: opts.name || ''
+    };
+  };
 
-  CB.spawnPeds = spawnPeds;
-  CB.updatePeds = updatePeds;
+  CB.spawnPeds = function (G) {
+    for (var i = 0; i < 42; i++) {
+      // Sidewalks: just off a road line, not inside a building.
+      var vert = CB.rng.chance(0.5);
+      var x, y;
+      if (vert) { x = CB.rng.pick(CFG.ROADS_X) + CB.rng.pick([-58, 58]); y = CB.rng.range(60, CFG.WATER_Y - 40); }
+      else { x = CB.rng.range(60, CFG.WORLD_W - 60); y = CB.rng.pick(CFG.ROADS_Y) + CB.rng.pick([-58, 58]); }
+      if (CB.buildingAt(G.city, x, y, 6) || CB.inWater(x, y)) continue;
+      G.peds.push(CB.makePed(x, y, {}));
+    }
+  };
+
+  // Pedestrians stroll along sidewalks; a nearby crime sends them running.
+  CB.updatePeds = function (G, dt) {
+    for (var i = G.peds.length - 1; i >= 0; i--) {
+      var p = G.peds[i];
+      if (p.hp <= 0) { p.downT += dt; if (p.downT > 6 && !p.rival) G.peds.splice(i, 1); continue; }
+      if (p.hitFlash > 0) p.hitFlash -= dt;
+      var threat = null;
+      if (G.lastCrimeAt > G.time - 2.5 && Math.hypot(G.player.x - p.x, G.player.y - p.y) < 190) threat = G.player;
+      if (G.gunfireAt > G.time - 1.5 && Math.hypot(G.gunfireX - p.x, G.gunfireY - p.y) < 260) threat = { x: G.gunfireX, y: G.gunfireY };
+      if (p.rival) { CB.updateRival(G, p, dt); continue; }
+      if (threat) { p.state = 'flee'; p.fleeT = 1.6; }
+      if (p.state === 'flee') {
+        p.fleeT -= dt;
+        var fx = p.x - (threat ? threat.x : G.player.x), fy = p.y - (threat ? threat.y : G.player.y);
+        var fl = Math.hypot(fx, fy) || 1;
+        p.angle = Math.atan2(fy, fx);
+        p.x += (fx / fl) * 165 * dt; p.y += (fy / fl) * 165 * dt;
+        if (p.fleeT <= 0) p.state = 'walk';
+      } else {
+        p.walkT -= dt;
+        if (p.walkT <= 0 || Math.hypot(p.tx - p.x, p.ty - p.y) < 8) {
+          p.walkT = CB.rng.range(2, 5);
+          // New stroll target: along the nearest road's sidewalk.
+          var nx = CB.nearestRoadX(p.x), ny = CB.nearestRoadY(p.y);
+          if (CB.rng.chance(0.5)) { p.tx = nx + (p.x >= nx ? 58 : -58); p.ty = Math.max(50, Math.min(CFG.WATER_Y - 30, p.y + CB.rng.range(-320, 320))); }
+          else { p.tx = Math.max(50, Math.min(CFG.WORLD_W - 50, p.x + CB.rng.range(-320, 320))); p.ty = ny + (p.y >= ny ? 58 : -58); }
+        }
+        var dx = p.tx - p.x, dy = p.ty - p.y, dl = Math.hypot(dx, dy);
+        if (dl > 4) { p.angle = Math.atan2(dy, dx); p.x += (dx / dl) * 52 * dt; p.y += (dy / dl) * 52 * dt; }
+      }
+      var c = CB.collideBuildings(G.city, p.x, p.y, 10);
+      p.x = c.x; p.y = c.y;
+      var cl = CB.clampWorld(p.x, p.y); p.x = cl.x; p.y = Math.min(cl.y, CFG.WATER_Y + 6);
+      if (CB.inWater(p.x, p.y)) { p.y = CFG.WATER_Y - 4; }
+    }
+  };
+
+  // Rival crew members hold ground, strafe a little and shoot back.
+  CB.updateRival = function (G, p, dt) {
+    var d = Math.hypot(G.player.x - p.x, G.player.y - p.y);
+    var tx = G.player.car ? G.player.car.x : G.player.x;
+    var ty = G.player.car ? G.player.car.y : G.player.y;
+    d = Math.hypot(tx - p.x, ty - p.y);
+    p.angle = Math.atan2(ty - p.y, tx - p.x);
+    if (d > 300) { p.x += Math.cos(p.angle) * 60 * dt; p.y += Math.sin(p.angle) * 60 * dt; }
+    else if (d < 130) { p.x -= Math.cos(p.angle) * 46 * dt; p.y -= Math.sin(p.angle) * 46 * dt; }
+    else { p.x += Math.cos(p.angle + Math.PI / 2) * Math.sin(G.time * 0.7 + p.x) * 22 * dt; p.y += Math.sin(p.angle + Math.PI / 2) * Math.sin(G.time * 0.7 + p.x) * 22 * dt; }
+    var c = CB.collideBuildings(G.city, p.x, p.y, 11); p.x = c.x; p.y = c.y;
+    p.fireT -= dt;
+    if (p.fireT <= 0 && d < 330 && CB.hasLOS(G, p.x, p.y, tx, ty)) {
+      p.fireT = CB.rng.range(0.8, 1.5);
+      var spread = CB.rng.range(-0.09, 0.09);
+      G.bullets.push({ x: p.x, y: p.y, vx: Math.cos(p.angle + spread) * 620, vy: Math.sin(p.angle + spread) * 620, life: 0.55, foe: true });
+      CB.sfx.shot();
+    }
+  };
+
+  // Someone nearby who can see a crime: a ped or a cruiser.
+  CB.witnessed = function (G, x, y) {
+    var i, d;
+    for (i = 0; i < G.peds.length; i++) {
+      d = Math.hypot(G.peds[i].x - x, G.peds[i].y - y);
+      if (d <= CFG.SEEN_RADIUS && G.peds[i].hp > 0 && CB.hasLOS(G, G.peds[i].x, G.peds[i].y, x, y)) return true;
+    }
+    for (i = 0; i < G.police.length; i++) {
+      d = Math.hypot(G.police[i].x - x, G.police[i].y - y);
+      if (d <= CFG.SEEN_RADIUS && CB.hasLOS(G, G.police[i].x, G.police[i].y, x, y)) return true;
+    }
+    return false;
+  };
 })();

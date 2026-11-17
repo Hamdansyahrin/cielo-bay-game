@@ -1,56 +1,37 @@
-// Cielo Bay — save.js: continue/save through localStorage. Only plain
-// progress is stored — cash, respect, mission index and position — so a
-// save can never carry a broken world with it.
+// Cielo Bay — save.js: progress in localStorage (cash, respect,
+// mission index, player position). Nothing leaves the browser.
 (function () {
   'use strict';
   var CB = window.CB = window.CB || {};
+  var KEY = CB.CFG.SAVE_KEY;
 
-  var Save = {
-    key: function () { return CB.CFG.SAVE_KEY; },
-    write: function (G) {
-      try {
-        var data = {
-          cash: Math.round(G.cash),
-          respect: G.respect,
-          mission: G.mission,
-          px: Math.round(G.player.x),
-          py: Math.round(G.player.y),
-          unlocked: G.unlocked,
-          savedAt: Date.now()
-        };
-        window.localStorage.setItem(this.key(), JSON.stringify(data));
-        return true;
-      } catch (e) { return false; }
-    },
-    read: function () {
-      try {
-        var raw = window.localStorage.getItem(this.key());
-        if (!raw) return null;
-        var data = JSON.parse(raw);
-        if (typeof data.cash !== 'number' || typeof data.mission !== 'number') return null;
-        return data;
-      } catch (e) { return null; }
-    },
-    has: function () { return this.read() !== null; },
-    clear: function () {
-      try { window.localStorage.removeItem(this.key()); } catch (e) { /* ignore */ }
+  CB.saveGame = function (G) {
+    try {
+      var data = {
+        cash: G.cash, respect: G.respect, mission: G.missionIndex,
+        x: Math.round(G.player.x), y: Math.round(G.player.y),
+        done: G.missionIndex >= 5
+      };
+      window.localStorage.setItem(KEY, JSON.stringify(data));
+      return true;
+    } catch (e) { return false; }
+  };
+  CB.loadGame = function () {
+    try {
+      var raw = window.localStorage.getItem(KEY);
+      if (!raw) return null;
+      var d = JSON.parse(raw);
+      if (typeof d.cash !== 'number' || typeof d.mission !== 'number') return null;
+      return d;
+    } catch (e) { return null; }
+  };
+  CB.hasSave = function () { return CB.loadGame() !== null; };
+  CB.clearSave = function () { try { window.localStorage.removeItem(KEY); } catch (e) {} };
+  CB.applySave = function (G, d) {
+    G.cash = d.cash; G.respect = d.respect || 0;
+    G.missionIndex = Math.max(0, Math.min(5, d.mission));
+    if (typeof d.x === 'number' && typeof d.y === 'number' && !CB.buildingAt(G.city, d.x, d.y, 4)) {
+      G.player.x = d.x; G.player.y = d.y;
     }
   };
-
-  CB.Save = Save;
-
-  // Apply a loaded save to a fresh game state. Position is clamped onto
-  // a road so a save can never strand the player inside a building.
-  Save.apply = function (G, data) {
-    G.cash = data.cash;
-    G.respect = data.respect || 0;
-    G.mission = Math.min(data.mission || 0, 5);
-    G.unlocked = data.unlocked || 0;
-    if (typeof data.px === 'number' && typeof data.py === 'number') {
-      G.player.x = Math.max(60, Math.min(3140, data.px));
-      G.player.y = Math.max(60, Math.min(2340, data.py));
-    }
-    return true;
-  };
-  CB.Save = Save;
 })();
