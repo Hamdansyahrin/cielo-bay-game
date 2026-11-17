@@ -17,18 +17,18 @@
     G.screen = 'playing';
     if (name === 'cover') {
       CB.startMission(G, 0);
-      G.player.x = 872; G.player.y = 706; G.player.angle = 0.4;
+      G.player.x = 1085; G.player.y = 695; G.player.angle = 2.75;
       G.input.mouseX = 900; G.input.mouseY = 330;
       near(G, 880, 700, 5, function (x, y) { if (!CB.buildingAt(G.city, x, y, 8) && !CB.onRoad(x, y)) G.peds.push(CB.makePed(x, y, {})); });
       near(G, 1000, 620, 3, function (x, y) { G.cars.push(CB.makeCar(CB.nearestRoadX(x), y, -Math.PI / 2, {})); });
     } else if (name === 'drive') {
       CB.startMission(G, 0);
-      var car = CB.makeCar(1750, 1022, 0, { color: '#e63946', name: 'Solstice' });
+      var car = CB.makeCar(1750, 2172, 0, { color: '#e63946', name: 'Solstice' });
       car.speed = 235; G.cars.push(car);
       G.player.car = car; car.driver = true;
       G.player.x = car.x; G.player.y = car.y;
-      near(G, 2100, 1000, 3, function (x, y) { G.cars.push(CB.makeCar(x, 978, Math.PI, {})); });
-      near(G, 1900, 920, 4, function (x, y) { if (!CB.buildingAt(G.city, x, y, 8)) G.peds.push(CB.makePed(x, y, {})); });
+      near(G, 2150, 2150, 3, function (x, y) { G.cars.push(CB.makeCar(x, 2128, Math.PI, {})); });
+      near(G, 1950, 2210, 4, function (x, y) { if (!CB.buildingAt(G.city, x, y, 8)) G.peds.push(CB.makePed(x, y, {})); });
     } else if (name === 'chase') {
       var ride = CB.makeCar(1400, 1250, -Math.PI / 2, { color: '#457b9d', name: 'Mako' });
       ride.speed = 260; G.cars.push(ride);
