@@ -156,7 +156,8 @@ function drawToasts(ctx, G, W, H) {
   let y = H - 190;
   for (const t of G.toasts) {
     const alpha = Math.min(1, t.t / 0.5, (t.life - t.t) / 0.5);
-    const display = (t.fromMara ? '📱 Mara: ' : '') + t.text;
+    let display = (t.fromMara ? '📱 Mara: ' : '') + t.text;
+    if (display.length > 82) display = display.slice(0, 79) + '…';
     ctx.save();
     ctx.globalAlpha = Math.max(0, alpha);
     ctx.fillStyle = 'rgba(20,16,30,0.85)';
