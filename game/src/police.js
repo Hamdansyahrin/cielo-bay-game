@@ -38,7 +38,11 @@
     if (G.wanted <= 0) return;
     var seen = false;
     for (var i = 0; i < G.police.length; i++) {
-      if (Math.hypot(G.police[i].x - G.player.x, G.police[i].y - G.player.y) < 560) { seen = true; break; }
+      // A wrecked cruiser cannot spot anyone, and neither can one
+      // whose view of the player is blocked by a building.
+      if (G.police[i].wrecked) continue;
+      var pd = Math.hypot(G.police[i].x - G.player.x, G.police[i].y - G.player.y);
+      if (pd < 240 && hasLOS(G, G.police[i].x, G.police[i].y, G.player.x, G.player.y)) { seen = true; break; }
     }
     if (seen || G.time - G.lastCrimeAt < CB.CFG.HEAT_HIDDEN_SECS) G.lastSeenAt = G.time;
     if (G.time - G.lastSeenAt > CB.CFG.HEAT_HIDDEN_SECS) {
@@ -57,17 +61,35 @@
     }
   }
 
+  // Line of sight between two points: false when a building stands
+  // between them. Heat only counts when the law can actually see you.
+  function hasLOS(G, x1, y1, x2, y2) {
+    var bs = G.city.buildings;
+    for (var i = 1; i < 14; i++) {
+      var t = i / 14;
+      var x = x1 + (x2 - x1) * t, y = y1 + (y2 - y1) * t;
+      for (var j = 0; j < bs.length; j++) {
+        var b = bs[j];
+        if (x > b.x && x < b.x + b.w && y > b.y && y < b.y + b.h) return false;
+      }
+    }
+    return true;
+  }
+
   function spawnPoliceCar(G, nearX, nearY) {
     var cfg = CB.CFG;
     var p = null;
     for (var tries = 0; tries < 12; tries++) {
       var cand = G.rng.roadPoint(cfg);
       var d = Math.hypot(cand.x - nearX, cand.y - nearY);
-      if (d > 420 && d < 950) { p = cand; break; }
+      // Land outside the 240px "seen" radius, so a fresh cruiser does
+      // not spot the player the instant it appears.
+      if (d > 650 && d < 1000) { p = cand; break; }
     }
-    if (!p) p = { x: nearX + 500, y: nearY };
+    if (!p) p = { x: nearX + 700, y: nearY };
     var car = CB.makeCar(G, { x: p.x, y: p.y, angle: 0, model: 'police', isPolice: true, color: '#1a2a3a' });
-    car.ai = { mode: 'pursue', stuckT: 0, reverseT: 0 };
+    // The trail is fresh at dispatch: the cruiser just got the call.
+    car.ai = { mode: 'pursue', stuckT: 0, reverseT: 0, seenT: G.time };
     car.bustT = 0;
     G.cars.push(car);
     G.police.push(car);
@@ -78,6 +100,7 @@
   CB.addCrime = addCrime;
   CB.updateWanted = updateWanted;
   CB.spawnPoliceCar = spawnPoliceCar;
+  CB.hasLOS = hasLOS;
 
   // Police cars chase on the road grid: steer toward the player, back
   // up when wedged against a building, and ram to make the bust.
@@ -85,7 +108,8 @@
     var wanted = G.wanted;
     var desired = wanted > 0 ? Math.min(wanted, CB.CFG.MAX_POLICE) : 0;
     G.policeSpawnT = (G.policeSpawnT || 0) - dt;
-    if (G.police.length < desired && G.policeSpawnT <= 0) {
+    var hiddenLong = G.wanted > 0 && G.time - G.lastSeenAt > CB.CFG.HEAT_HIDDEN_SECS;
+    if (G.police.length < desired && G.policeSpawnT <= 0 && !hiddenLong) {
       spawnPoliceCar(G, G.player.x, G.player.y);
       G.policeSpawnT = 0.9;
     }
@@ -100,11 +124,29 @@
     }
     updateRoadblocks(G, dt);
     var p = G.player;
+    if (!G.lastKnown) G.lastKnown = { x: p.x, y: p.y };
+    var giveUps = [];
     G.police.forEach(function (car) {
       if (car.wrecked) return;
       var def = CB.CFG.CARS.police;
-      var dx = p.x - car.x, dy = p.y - car.y;
-      var dist = Math.hypot(dx, dy) || 1;
+      var pdx = p.x - car.x, pdy = p.y - car.y;
+      var dist = Math.hypot(pdx, pdy) || 1;
+      // This cruiser's own eyes: a clear view refreshes its trail.
+      if (dist < 240 && hasLOS(G, car.x, car.y, p.x, p.y)) {
+        car.ai.seenT = G.time;
+        G.lastSeenAt = G.time;
+        G.lastKnown = { x: p.x, y: p.y };
+      }
+      // A cruiser that lost the trail eight seconds ago gives up and
+      // leaves; the heat can then cool for real.
+      if (G.time - (car.ai.seenT || -999) > 8) {
+        giveUps.push(car);
+        return;
+      }
+      // Chase the live position when freshly seen, else the last place
+      // the player was spotted.
+      var tgt = (G.time - (car.ai.seenT || -999) < 3) ? p : G.lastKnown;
+      var dx = tgt.x - car.x, dy = tgt.y - car.y;
       var wantAngle = Math.atan2(dy, dx);
       var diff = wantAngle - car.angle;
       while (diff > Math.PI) diff -= Math.PI * 2;
@@ -148,6 +190,13 @@
       }
       CB.carSmoke(G, car, dt);
     });
+    giveUps.forEach(function (car) {
+      var gi = G.police.indexOf(car);
+      if (gi >= 0) G.police.splice(gi, 1);
+      var ci = G.cars.indexOf(car);
+      if (ci >= 0) G.cars.splice(ci, 1);
+    });
+    if (giveUps.length > 0 && G.police.length === 0) CB.toast(G, 'You lost the cruisers — stay out of sight', 3);
     CB.Audio.updateSiren(G.police.length > 0, dt);
   }
 

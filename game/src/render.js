@@ -113,13 +113,6 @@
         ctx.fillRect(x, ry - 2, 30, 4);
       }
     });
-    // Street name painted on the beachfront drive.
-    ctx.save();
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.font = 'bold 15px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('B O A R D W A L K   D R', 2900, 700);
-    ctx.restore();
   }
 
   function drawPier(ctx, G) {

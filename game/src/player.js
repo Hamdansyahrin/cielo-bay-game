@@ -185,21 +185,31 @@
     }
   }
 
-  // Bullets fly, spark on walls, and hit rivals or the player.
+  // Bullets fly, spark on walls, and hit rivals or the player. Hits are
+  // tested against the whole step the bullet took, so a fast bullet can
+  // never jump over its target between two slow frames.
+  function segDist(px, py, x1, y1, x2, y2) {
+    var dx = x2 - x1, dy = y2 - y1;
+    var len2 = dx * dx + dy * dy;
+    var t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / len2));
+    return Math.hypot(px - (x1 + dx * t), py - (y1 + dy * t));
+  }
+
   function updateBullets(G, dt) {
     for (var i = G.bullets.length - 1; i >= 0; i--) {
       var b = G.bullets[i];
+      var ox = b.x, oy = b.y;
       b.x += b.vx * dt; b.y += b.vy * dt;
       b.life -= dt;
       var dead = b.life <= 0;
-      if (!dead && G.city.blocked(b.x, b.y, 2)) {
+      if (!dead && (G.city.blocked(b.x, b.y, 2) || G.city.blocked((ox + b.x) / 2, (oy + b.y) / 2, 2))) {
         dead = true;
         G.particles.push({ x: b.x, y: b.y, vx: 0, vy: 0, life: 0.15, maxLife: 0.15, color: '#ffd27a', size: 5, kind: 'dot' });
       }
       if (!dead && b.from === 'player') {
         for (var j = 0; j < G.rivals.length; j++) {
           var r = G.rivals[j];
-          if (r.hp > 0 && Math.hypot(r.x - b.x, r.y - b.y) < 16) {
+          if (r.hp > 0 && segDist(r.x, r.y, ox, oy, b.x, b.y) < 16) {
             damageRival(G, r, b.dmg);
             dead = true;
             break;
@@ -208,10 +218,10 @@
       }
       if (!dead && b.from === 'rival') {
         var p = G.player;
-        if (p.onFoot && Math.hypot(p.x - b.x, p.y - b.y) < 14) {
+        if (p.onFoot && segDist(p.x, p.y, ox, oy, b.x, b.y) < 14) {
           damagePlayer(G, 8);
           dead = true;
-        } else if (!p.onFoot && p.car && Math.hypot(p.car.x - b.x, p.car.y - b.y) < 26) {
+        } else if (!p.onFoot && p.car && segDist(p.car.x, p.car.y, ox, oy, b.x, b.y) < 26) {
           p.car.damage = Math.min(100, p.car.damage + 2);
           G.particles.push({ x: b.x, y: b.y, vx: 0, vy: 0, life: 0.15, maxLife: 0.15, color: '#ffd27a', size: 5, kind: 'dot' });
           dead = true;

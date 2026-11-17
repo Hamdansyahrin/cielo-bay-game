@@ -29,6 +29,7 @@
       cars: [], peds: [], police: [], rivals: [], roadblocks: [],
       bullets: [], particles: [],
       wanted: 0, wantedPoints: 0, lastCrimeAt: -9999, lastSeenAt: -9999, heatTimer: 0,
+      lastKnown: { x: cfg.SPAWN.x, y: cfg.SPAWN.y },
       cash: 0, respect: 0, mission: 0, missionState: null, unlocked: 0, freeRoam: false,
       camera: { x: 0, y: 0 }, shake: 0, muzzle: 0,
       keys: {}, mouse: { x: 640, y: 360, down: false, right: false },

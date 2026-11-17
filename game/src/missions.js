@@ -8,19 +8,19 @@
 
   var MISSIONS = [
     { title: 'Lift the Comet', giver: 'Mara Voss',
-      brief: 'Mara: There is a red Comet parked on Marina Blvd. Lift it and bring it to my chop shop on Solano Ave. Quietly, if you can.',
+      brief: 'There is a red Comet parked on Marina Blvd. Lift it and bring it to my chop shop on Solano Ave. Quietly, if you can.',
       objective: 'Steal the marked Comet' },
     { title: 'Sunset Courier', giver: 'Mara Voss',
-      brief: 'Mara: Four drops, one timer. Hit every checkpoint before the clock dies and the package is yours to keep. Drive like you mean it.',
+      brief: 'Four drops, one timer. Hit every checkpoint before the clock dies and the package is yours to keep. Drive like you mean it.',
       objective: 'Hit all 4 courier checkpoints' },
     { title: 'Lose the Heat', giver: 'Mara Voss',
-      brief: 'Mara: You are hot — three stars and every cruiser in the bay. Survive the chase, then go dark until the heat is gone.',
+      brief: 'You are hot — three stars and every cruiser in the bay. Survive the chase, then go dark until the heat is gone.',
       objective: 'Survive the chase, then lose the heat' },
     { title: 'Take Back the Pier', giver: 'Mara Voss',
-      brief: 'Mara: The Vipers hold the pier and they are taxing my runners. Clear them out. Pistol work — watch the crossfire.',
+      brief: 'The Vipers hold the pier and they are taxing my runners. Clear them out. Pistol work — watch the crossfire.',
       objective: 'Clear the rivals off the pier' },
     { title: 'The Armored Van', giver: 'Mara Voss',
-      brief: 'Mara: The big one. An armored van sits at the port. Take it, eat the four stars, and bring it to the chop shop. This buys your name.',
+      brief: 'The big one. An armored van sits at the port. Take it, eat the four stars, and bring it to the chop shop. This buys your name.',
       objective: 'Take the armored van to the chop shop' }
   ];
 
@@ -54,8 +54,11 @@
     S.phase = 'courier';
   }
   function setupChase(G, S) {
-    // The heat is scripted on: three stars, cruisers already rolling.
-    CB.addCrime(G, 120);
+    // The heat is scripted on: exactly three stars, cruisers already rolling.
+    G.wantedPoints = 110;
+    G.wanted = 3;
+    G.lastCrimeAt = G.time;
+    G.lastSeenAt = G.time;
     S.surviveT = CB.CFG.CHASE_SURVIVE_SECS;
     S.hadThree = true;
     S.phase = 'survive';
@@ -88,7 +91,11 @@
     var S = G.missionState;
     if (G.mission === 4 && S && S.phase === 'take' && car.missionVan) {
       S.phase = 'deliver';
-      CB.addCrime(G, 180);
+      // Four stars at least: the job is the heat, not just the van.
+      G.wantedPoints = Math.max(G.wantedPoints, 170);
+      G.wanted = Math.max(G.wanted, 4);
+      G.lastCrimeAt = G.time;
+      G.lastSeenAt = G.time;
       CB.toast(G, 'Four stars! Lose them or outrun them — deliver the van!', 4);
     }
   }
@@ -178,7 +185,12 @@
     CB.toast(G, 'JOB DONE — ' + MISSIONS[index].title + '  +$' + reward + '  +' + respect + ' respect', 5);
     CB.Save.write(G);
     if (G.mission < 5) {
-      setTimeout(function () { if (G.screen === 'playing') startMission(G, G.mission); }, 2500);
+      // Start the next job shortly — unless the player has already begun
+      // it, in which case their progress is left alone.
+      var next = G.mission;
+      setTimeout(function () {
+        if (G.screen === 'playing' && G.mission === next && G.missionState && G.missionState.index === index) startMission(G, next);
+      }, 2500);
     } else {
       G.freeRoam = true;
       CB.toast(G, 'Free roam — Cielo Bay is yours. Mara will call when there is work.', 6);
